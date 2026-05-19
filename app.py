@@ -25,6 +25,7 @@ OUTPUT_DIR = DATA_DIR / "firmware"
 LOG_DIR = DATA_DIR / "logs"
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
+DEVICE_CACHE = {}
 
 DEFAULT_CONFIG = {
     "listen_host": "0.0.0.0",
@@ -122,6 +123,99 @@ def latest_openwrt_release(branch_prefix):
     if not versions:
         raise RuntimeError(f"No OpenWrt releases found for prefix {branch_prefix!r}")
     return sorted(versions, key=version_key)[-1]
+
+
+def title_to_text(title):
+    if isinstance(title, str):
+        return title
+    if not isinstance(title, dict):
+        return ""
+    parts = []
+    for key in ["vendor", "model", "variant", "version"]:
+        value = str(title.get(key, "")).strip()
+        if value:
+            parts.append(value)
+    return " ".join(parts)
+
+
+def profile_display_name(profile_id, profile):
+    titles = profile.get("titles") or []
+    names = [title_to_text(item) for item in titles]
+    names = [name for name in names if name]
+    if names:
+        return " / ".join(names)
+    return profile_id.replace("_", " ").replace(",", " ")
+
+
+def split_target_path(target_path):
+    parts = str(target_path or "").strip("/").split("/")
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return str(target_path or ""), ""
+
+
+def load_release_overview(release):
+    cache_key = ("overview", release)
+    cached = DEVICE_CACHE.get(cache_key)
+    if cached:
+        return cached
+    url = f"https://downloads.openwrt.org/releases/{release}/.overview.json"
+    data = json.loads(http_text(url))
+    DEVICE_CACHE[cache_key] = data
+    return data
+
+
+def load_profiles_json(release, target_path):
+    cache_key = ("profiles", release, target_path)
+    cached = DEVICE_CACHE.get(cache_key)
+    if cached:
+        return cached
+    target, subtarget = split_target_path(target_path)
+    url = f"https://downloads.openwrt.org/releases/{release}/targets/{target}/{subtarget}/profiles.json"
+    data = json.loads(http_text(url))
+    DEVICE_CACHE[cache_key] = data
+    return data
+
+
+def search_devices(query, limit=20):
+    cfg = config()
+    release = latest_openwrt_release(cfg.get("release_branch_prefix", "25."))
+    overview = load_release_overview(release)
+    words = [w.lower() for w in re.split(r"\s+", query.strip()) if w.strip()]
+    if not words:
+        return {"release": release, "devices": []}
+    matches = []
+    for item in overview.get("profiles", []):
+        profile_id = item.get("id") or item.get("profile") or ""
+        target_path = item.get("target") or ""
+        target, subtarget = split_target_path(target_path)
+        titles = item.get("titles") or []
+        if isinstance(titles, dict):
+            titles = [titles]
+        name = " / ".join([title_to_text(t) for t in titles if title_to_text(t)]) or profile_id
+        haystack = f"{name} {profile_id} {target_path}".lower()
+        if all(word in haystack for word in words):
+            matches.append({
+                "name": name,
+                "profile": profile_id,
+                "target": target,
+                "subtarget": subtarget,
+                "target_path": target_path,
+                "arch": "",
+                "packages": "",
+            })
+        if len(matches) >= limit:
+            break
+    for match in matches:
+        try:
+            profiles_json = load_profiles_json(release, match["target_path"])
+            profile = profiles_json.get("profiles", {}).get(match["profile"], {})
+            match["arch"] = profiles_json.get("arch_packages", "")
+            match["packages"] = " ".join(profile.get("device_packages", []) or [])
+            match["name"] = profile_display_name(match["profile"], profile)
+        except Exception:
+            pass
+    return {"release": release, "devices": matches}
 
 
 def sha256_file(path):
@@ -636,6 +730,8 @@ INDEX_HTML = r"""<!doctype html>
       <h2>Роутеры</h2>
       <button class="secondary" onclick="addRouter()">Добавить роутер</button>
     </div>
+    <label>Поиск модели как в Firmware Selector <input id="deviceSearch" placeholder="Например: GL-MT6000, Archer C7, OpenWrt One" oninput="searchDevices()"></label>
+    <div id="deviceResults"></div>
     <div id="routers"></div>
   </section>
   <section>
@@ -664,6 +760,7 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 let cfg = {};
+let searchTimer = null;
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -725,6 +822,51 @@ function addRouter() {
   cfg.routers = cfg.routers || [];
   cfg.routers.push({name:'router', target:'', subtarget:'', profile:'', arch:'', packages:'luci luci-app-attendedsysupgrade owut', enabled:true});
   renderRouters();
+}
+
+function addDeviceRouter(device) {
+  cfg.routers = cfg.routers || [];
+  const safeName = device.name || device.profile || 'router';
+  cfg.routers.push({
+    name: safeName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-|-$/g, '') || device.profile,
+    target: device.target || '',
+    subtarget: device.subtarget || '',
+    profile: device.profile || '',
+    arch: device.arch || '',
+    packages: 'luci luci-ssl luci-app-attendedsysupgrade owut',
+    enabled: true
+  });
+  deviceResults.innerHTML = '';
+  deviceSearch.value = '';
+  renderRouters();
+}
+
+function renderDeviceResults(report) {
+  const devices = report.devices || [];
+  deviceResults.innerHTML = devices.length ? devices.map((d, i) => `
+    <div class="item">
+      <div><b>${esc(d.name)}</b> <span class="pill">${esc(d.profile)}</span></div>
+      <div class="muted">${esc(d.target)}/${esc(d.subtarget)} · ${esc(d.arch || 'arch unknown')} · OpenWrt ${esc(report.release)}</div>
+      <button class="secondary" onclick='addDeviceRouter(${JSON.stringify(d).replace(/'/g, '&apos;')})'>Выбрать</button>
+    </div>`).join('') : '<div class="muted">Ничего не найдено.</div>';
+}
+
+function searchDevices() {
+  clearTimeout(searchTimer);
+  const q = deviceSearch.value.trim();
+  if (q.length < 2) {
+    deviceResults.innerHTML = '';
+    return;
+  }
+  searchTimer = setTimeout(async () => {
+    deviceResults.innerHTML = '<div class="muted">Ищу...</div>';
+    try {
+      const report = await api('/api/devices?q=' + encodeURIComponent(q));
+      renderDeviceResults(report);
+    } catch (e) {
+      deviceResults.innerHTML = '<div class="muted">' + esc(e.message) + '</div>';
+    }
+  }, 300);
 }
 
 function addSource() {
@@ -807,6 +949,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, config())
         elif path == "/api/status":
             self.send(200, state())
+        elif path == "/api/devices":
+            params = urllib.parse.parse_qs(parsed.query)
+            query = params.get("q", [""])[0]
+            try:
+                limit = int(params.get("limit", ["20"])[0])
+            except ValueError:
+                limit = 20
+            self.send(200, search_devices(query, limit=max(1, min(limit, 50))))
         elif path in ["/api/overview", "/api/v1/overview", "/json/v1/overview.json"]:
             self.send(200, asu_overview())
         elif path.startswith("/logs/"):
