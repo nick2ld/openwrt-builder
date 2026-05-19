@@ -128,6 +128,22 @@ def last_log_line(log_url):
         return ""
 
 
+def job_by_log_name(log_name):
+    for job in state().get("jobs", []):
+        if Path(str(job.get("log", ""))).name == log_name:
+            return job
+    return None
+
+
+def read_log_response(file_path):
+    text = file_path.read_text(encoding="utf-8", errors="replace")
+    job = job_by_log_name(file_path.name)
+    if job and job.get("status") == "success" and job.get("output") and "Build completed successfully" not in text:
+        text = text.rstrip() + f"\n[{job.get('updated_at') or utc_now()}] Firmware ready: {job.get('output')}\n"
+        text += f"[{job.get('updated_at') or utc_now()}] Build completed successfully\n"
+    return text
+
+
 def enriched_state():
     st = state()
     jobs = []
@@ -1929,7 +1945,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/logs/"):
             file_path = LOG_DIR / Path(path).name
             if file_path.exists():
-                self.send(200, file_path.read_text(encoding="utf-8", errors="replace"), "text/plain; charset=utf-8")
+                self.send(200, read_log_response(file_path), "text/plain; charset=utf-8")
             else:
                 self.send(404, {"error": "not found"})
         elif path.startswith("/firmware/"):
