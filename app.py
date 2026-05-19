@@ -746,10 +746,15 @@ INDEX_HTML = r"""<!doctype html>
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .item { border: 1px solid #dfe5ef; border-radius: 8px; padding: 12px; display: grid; gap: 10px; margin-bottom: 10px; }
-    details.item { display: block; }
-    summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
-    summary::-webkit-details-marker { display: none; }
-    .details-body { display: grid; gap: 10px; margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; border-bottom: 1px solid #e6edf6; padding: 10px 8px; vertical-align: middle; }
+    th { font-size: 12px; color: #64748b; font-weight: 700; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, .48); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 20; }
+    .modal-backdrop.open { display: flex; }
+    .modal { width: min(980px, 100%); max-height: 92vh; overflow: auto; background: white; border-radius: 8px; border: 1px solid #c9d3e3; padding: 18px; display: grid; gap: 14px; }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .modal-head h2 { margin: 0; }
     textarea.packages { min-height: 160px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.45; }
     .muted { color: #64748b; font-size: 13px; }
     .pill { display: inline-flex; background: #eef4ff; color: #245aa3; border-radius: 999px; padding: 4px 8px; font-size: 12px; }
@@ -778,10 +783,8 @@ INDEX_HTML = r"""<!doctype html>
   <section>
     <div class="row" style="justify-content:space-between">
       <h2>Роутеры</h2>
-      <button class="secondary" onclick="addRouter()">Добавить роутер</button>
+      <button class="secondary" onclick="openRouterModal()">Добавить роутер</button>
     </div>
-    <label>Поиск модели как в Firmware Selector <input id="deviceSearch" placeholder="Например: GL-MT6000, Archer C7, OpenWrt One" oninput="searchDevices()"></label>
-    <div id="deviceResults"></div>
     <div id="routers"></div>
   </section>
   <section>
@@ -808,12 +811,38 @@ INDEX_HTML = r"""<!doctype html>
     <div id="jobs"></div>
   </section>
 </main>
+<div id="routerModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="routerModalTitle">Роутер</h2>
+      <button class="secondary" onclick="closeRouterModal()">Закрыть</button>
+    </div>
+    <label>Поиск модели как в Firmware Selector <input id="modalDeviceSearch" placeholder="Например: Cudy WR3000, GL-MT6000, Archer C7" oninput="searchDevices()"></label>
+    <div id="modalDeviceResults"></div>
+    <div class="grid">
+      <label>Название <input id="routerName"></label>
+      <label>Target <input id="routerTarget" placeholder="mediatek"></label>
+      <label>Subtarget <input id="routerSubtarget" placeholder="filogic"></label>
+      <label>Profile <input id="routerProfile" placeholder="cudy_wr3000-v1"></label>
+    </div>
+    <div class="grid">
+      <label>Arch APK <input id="routerArch" placeholder="aarch64_cortex-a53"></label>
+      <label>Включен <select id="routerEnabled"><option value="true">Да</option><option value="false">Нет</option></select></label>
+    </div>
+    <label>Пакеты прошивки для этого роутера <textarea id="routerPackages" class="packages" spellcheck="false"></textarea></label>
+    <div class="row">
+      <button onclick="saveRouterModal()">Сохранить роутер</button>
+      <button class="secondary" onclick="closeRouterModal()">Отмена</button>
+    </div>
+  </div>
+</div>
 <script>
 let cfg = {};
 let searchTimer = null;
 let saveTimer = null;
 let dirty = false;
 let deviceResultCache = [];
+let editingRouterIndex = null;
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -824,27 +853,29 @@ async function api(path, options) {
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function renderRouters() {
-  routers.innerHTML = (cfg.routers || []).map((r, i) => `
-    <details class="item" open>
-      <summary>
-        <span><b>${esc(r.name || 'router')}</b> <span class="pill">${esc(r.profile || 'profile')}</span></span>
-        <span class="muted">${esc(r.target || '?')}/${esc(r.subtarget || '?')} · ${esc(r.arch || 'arch?')}</span>
-      </summary>
-      <div class="details-body">
-      <div class="grid">
-        <label>Название <input value="${esc(r.name)}" oninput="cfg.routers[${i}].name=this.value; scheduleSave()"></label>
-        <label>Target <input value="${esc(r.target)}" placeholder="mediatek" oninput="cfg.routers[${i}].target=this.value; scheduleSave()"></label>
-        <label>Subtarget <input value="${esc(r.subtarget)}" placeholder="filogic" oninput="cfg.routers[${i}].subtarget=this.value; scheduleSave()"></label>
-        <label>Profile <input value="${esc(r.profile)}" placeholder="glinet_gl-mt6000" oninput="cfg.routers[${i}].profile=this.value; scheduleSave()"></label>
-      </div>
-      <div class="grid">
-        <label>Arch APK <input value="${esc(r.arch)}" placeholder="aarch64_cortex-a53" oninput="cfg.routers[${i}].arch=this.value; scheduleSave()"></label>
-        <label>Включен <select onchange="cfg.routers[${i}].enabled=this.value==='true'; scheduleSave()"><option value="true" ${r.enabled!==false?'selected':''}>Да</option><option value="false" ${r.enabled===false?'selected':''}>Нет</option></select></label>
-      </div>
-      <label>Пакеты прошивки для этого роутера <textarea class="packages" spellcheck="false" oninput="cfg.routers[${i}].packages=this.value; scheduleSave()">${esc(r.packages)}</textarea></label>
-      <div class="row"><button class="danger" onclick="cfg.routers.splice(${i},1);renderRouters(); save()">Удалить</button><button class="secondary" onclick="buildNow('${esc(r.name)}')">Собрать этот</button></div>
-      </div>
-    </details>`).join('');
+  const list = cfg.routers || [];
+  if (!list.length) {
+    routers.innerHTML = '<div class="muted">Роутеры еще не добавлены.</div>';
+    return;
+  }
+  routers.innerHTML = `
+    <table>
+      <thead><tr><th>Название</th><th>Profile</th><th>Target</th><th>Arch</th><th></th></tr></thead>
+      <tbody>
+        ${list.map((r, i) => `
+          <tr>
+            <td><b>${esc(r.name || 'router')}</b><div class="muted">${r.enabled === false ? 'выключен' : 'включен'}</div></td>
+            <td>${esc(r.profile || '')}</td>
+            <td>${esc(r.target || '')}/${esc(r.subtarget || '')}</td>
+            <td>${esc(r.arch || '')}</td>
+            <td><div class="actions">
+              <button class="secondary" onclick="openRouterModal(${i})">Редактировать</button>
+              <button class="secondary" onclick="buildRouterByIndex(${i})">Собрать</button>
+              <button class="danger" onclick="deleteRouter(${i})">Удалить</button>
+            </div></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
 }
 
 function renderSources() {
@@ -883,13 +914,6 @@ function scheduleSave() {
   saveTimer = setTimeout(save, 800);
 }
 
-function addRouter() {
-  cfg.routers = cfg.routers || [];
-  cfg.routers.push({name:uniqueRouterName('router'), target:'', subtarget:'', profile:'', arch:'', packages:'luci luci-app-attendedsysupgrade owut', enabled:true});
-  renderRouters();
-  save();
-}
-
 function uniqueRouterName(base) {
   base = base || 'router';
   const existing = new Set((cfg.routers || []).map(r => r.name));
@@ -899,59 +923,116 @@ function uniqueRouterName(base) {
   return name;
 }
 
-function addDeviceRouter(device) {
+function emptyRouter() {
+  return {name: uniqueRouterName('router'), target:'', subtarget:'', profile:'', arch:'', packages:'luci luci-app-attendedsysupgrade', enabled:true};
+}
+
+function openRouterModal(index = null) {
+  editingRouterIndex = index;
+  const router = index === null ? emptyRouter() : {...(cfg.routers[index] || emptyRouter())};
+  routerModalTitle.textContent = index === null ? 'Добавить роутер' : 'Редактировать роутер';
+  routerName.value = router.name || '';
+  routerTarget.value = router.target || '';
+  routerSubtarget.value = router.subtarget || '';
+  routerProfile.value = router.profile || '';
+  routerArch.value = router.arch || '';
+  routerEnabled.value = router.enabled === false ? 'false' : 'true';
+  routerPackages.value = router.packages || '';
+  modalDeviceSearch.value = '';
+  modalDeviceResults.innerHTML = '';
+  deviceResultCache = [];
+  routerModal.classList.add('open');
+}
+
+function closeRouterModal() {
+  routerModal.classList.remove('open');
+  editingRouterIndex = null;
+}
+
+function routerFromModal() {
+  return {
+    name: routerName.value.trim() || uniqueRouterName('router'),
+    target: routerTarget.value.trim(),
+    subtarget: routerSubtarget.value.trim(),
+    profile: routerProfile.value.trim(),
+    arch: routerArch.value.trim(),
+    packages: routerPackages.value.trim(),
+    enabled: routerEnabled.value === 'true'
+  };
+}
+
+async function saveRouterModal() {
   cfg.routers = cfg.routers || [];
+  const router = routerFromModal();
+  if (editingRouterIndex === null) {
+    router.name = uniqueRouterName(router.name);
+    cfg.routers.push(router);
+  } else {
+    cfg.routers[editingRouterIndex] = router;
+  }
+  renderRouters();
+  closeRouterModal();
+  await save();
+}
+
+function fillModalFromDevice(device) {
   const safeName = device.name || device.profile || 'router';
   const baseName = safeName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-|-$/g, '') || device.profile;
-  cfg.routers.push({
-    name: uniqueRouterName(baseName),
-    target: device.target || '',
-    subtarget: device.subtarget || '',
-    profile: device.profile || '',
-    arch: device.arch || '',
-    packages: device.packages || 'luci luci-app-attendedsysupgrade',
-    enabled: true
-  });
-  deviceResults.innerHTML = '';
-  deviceSearch.value = '';
-  renderRouters();
-  save();
+  if (!routerName.value || editingRouterIndex === null) routerName.value = uniqueRouterName(baseName);
+  routerTarget.value = device.target || '';
+  routerSubtarget.value = device.subtarget || '';
+  routerProfile.value = device.profile || '';
+  routerArch.value = device.arch || '';
+  routerPackages.value = device.packages || routerPackages.value || 'luci luci-app-attendedsysupgrade';
+  modalDeviceResults.innerHTML = '';
+  modalDeviceSearch.value = '';
 }
 
 function addDeviceRouterByIndex(index) {
   const device = deviceResultCache[index];
-  if (device) addDeviceRouter(device);
+  if (device) fillModalFromDevice(device);
+}
+
+function buildRouterByIndex(index) {
+  const router = (cfg.routers || [])[index];
+  if (router) buildNow(router.name);
+}
+
+function deleteRouter(index) {
+  cfg.routers.splice(index, 1);
+  renderRouters();
+  save();
 }
 
 function renderDeviceResults(report) {
   if (report.error) {
-    deviceResults.innerHTML = '<div class="item"><b>Не удалось загрузить список устройств</b><div class="muted">' + esc(report.error) + '</div></div>';
+    modalDeviceResults.innerHTML = '<div class="item"><b>Не удалось загрузить список устройств</b><div class="muted">' + esc(report.error) + '</div></div>';
     return;
   }
   const devices = report.devices || [];
   deviceResultCache = devices;
-  deviceResults.innerHTML = devices.length ? devices.map((d, i) => `
+  modalDeviceResults.innerHTML = devices.length ? devices.map((d, i) => `
     <div class="item">
       <div><b>${esc(d.name)}</b> <span class="pill">${esc(d.profile)}</span></div>
       <div class="muted">${esc(d.target)}/${esc(d.subtarget)} · ${esc(d.arch || 'arch unknown')} · OpenWrt ${esc(report.release)}</div>
-      <button class="secondary" onclick="addDeviceRouterByIndex(${i})">Выбрать</button>
+      <button class="secondary" onclick="addDeviceRouterByIndex(${i})">Заполнить поля</button>
     </div>`).join('') : '<div class="muted">Ничего не найдено.</div>';
 }
 
 function searchDevices() {
   clearTimeout(searchTimer);
-  const q = deviceSearch.value.trim();
+  const q = modalDeviceSearch.value.trim();
   if (q.length < 2) {
-    deviceResults.innerHTML = '';
+    modalDeviceResults.innerHTML = '';
     return;
   }
   searchTimer = setTimeout(async () => {
-    deviceResults.innerHTML = '<div class="muted">Ищу...</div>';
+    modalDeviceResults.innerHTML = '<div class="muted">Ищу...</div>';
     try {
       const report = await api('/api/devices?q=' + encodeURIComponent(q));
       renderDeviceResults(report);
     } catch (e) {
-      deviceResults.innerHTML = '<div class="muted">' + esc(e.message) + '</div>';
+      modalDeviceResults.innerHTML = '<div class="muted">' + esc(e.message) + '</div>';
     }
   }, 300);
 }
