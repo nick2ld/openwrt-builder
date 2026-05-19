@@ -439,10 +439,13 @@ def package_name_from_apk(filename):
     name = filename.rsplit("/", 1)[-1]
     if not name.endswith(".apk"):
         return ""
-    for sep in ["_", "-"]:
-        if sep in name:
-            return name.split(sep, 1)[0]
-    return name[:-4]
+    stem = name[:-4]
+    if "_" in stem:
+        return stem.split("_", 1)[0]
+    version_match = re.match(r"^(.+)-(?:v)?\d[\w.+:~]*?(?:-r\d+)?$", stem)
+    if version_match:
+        return version_match.group(1)
+    return stem
 
 
 def source_candidate_urls(src, release, arch):
