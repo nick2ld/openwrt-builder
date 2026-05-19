@@ -165,7 +165,17 @@ EOF
   cat >"$UPDATER_FILE" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
-exec systemd-run --unit=openwrt-builder-self-update --collect --same-dir --property=Type=oneshot --property=StandardOutput=append:${DATA_DIR}/logs/self-update.log --property=StandardError=append:${DATA_DIR}/logs/self-update.log ${UPDATE_SCRIPT_FILE}
+mkdir -p "${DATA_DIR}/logs"
+UNIT="openwrt-builder-self-update-\$(date +%s)"
+echo "[\$(date -Is)] starting \$UNIT" >>"${DATA_DIR}/logs/self-update.log"
+exec systemd-run \
+  --unit="\$UNIT" \
+  --collect \
+  --property=Type=oneshot \
+  --property=WorkingDirectory=/tmp \
+  --property=StandardOutput=append:${DATA_DIR}/logs/self-update.log \
+  --property=StandardError=append:${DATA_DIR}/logs/self-update.log \
+  ${UPDATE_SCRIPT_FILE}
 EOF
   chmod 0755 "$UPDATER_FILE"
   chown root:root "$UPDATER_FILE"

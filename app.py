@@ -350,14 +350,23 @@ def version_status():
 
 def run_self_update():
     log_path = LOG_DIR / "self-update.log"
-    cmd = "sudo /usr/local/sbin/openwrt-builder-update"
+    cmd = ["sudo", "/usr/local/sbin/openwrt-builder-update"]
     with log_path.open("a", encoding="utf-8") as logfh:
         logfh.write(f"[{utc_now()}] Running self update\n")
-        subprocess.Popen(["bash", "-lc", cmd], stdout=logfh, stderr=subprocess.STDOUT, start_new_session=True)
+        logfh.flush()
+        try:
+            proc = subprocess.run(cmd, stdout=logfh, stderr=subprocess.STDOUT, timeout=20)
+        except subprocess.TimeoutExpired as exc:
+            logfh.write(f"[{utc_now()}] ERROR: updater helper timed out while starting: {exc}\n")
+            raise RuntimeError("updater helper timed out while starting")
+        if proc.returncode != 0:
+            logfh.write(f"[{utc_now()}] ERROR: updater helper failed with exit code {proc.returncode}\n")
+            raise RuntimeError(f"updater helper failed with exit code {proc.returncode}")
 
     def mutate(st):
         st["self_update"] = {"started_at": utc_now(), "log": "/logs/self-update.log"}
     update_state(mutate)
+    return {"status": "started", "log": "/logs/self-update.log"}
 
 
 def sha256_file(path):
@@ -1630,9 +1639,14 @@ async function checkVersion() {
 
 async function runUpdate() {
   versionStatus.textContent = 'Запускаю обновление...';
-  const result = await api('/api/update', {method:'POST'});
-  versionStatus.textContent = 'Обновление запущено. Сервис перезапустится, обновите страницу через 10-20 секунд.';
-  if (result.log) viewLog(result.log, 'Обновление приложения');
+  try {
+    const result = await api('/api/update', {method:'POST'});
+    versionStatus.textContent = 'Обновление запущено. Сервис перезапустится, обновите страницу через 10-20 секунд.';
+    if (result.log) viewLog(result.log, 'Обновление приложения');
+  } catch (e) {
+    versionStatus.textContent = 'Обновление не запустилось: ' + e.message;
+    viewLog('/logs/self-update.log', 'Обновление приложения');
+  }
 }
 
 async function cleanupJobs() {
@@ -1792,8 +1806,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/scan-packages":
             self.send(200, scan_repositories())
         elif path == "/api/update":
-            run_self_update()
-            self.send(202, {"status": "started", "log": "/logs/self-update.log"})
+            try:
+                self.send(202, run_self_update())
+            except Exception as exc:
+                self.send(500, {"status": "failed", "error": str(exc), "log": "/logs/self-update.log"})
         elif path == "/api/cleanup":
             self.send(200, clear_old_jobs())
         elif path in ["/api/v1/build", "/api/asu/api/v1/build", "/api/build-request"]:
