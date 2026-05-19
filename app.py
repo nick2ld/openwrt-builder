@@ -594,10 +594,49 @@ def copy_apks_to_builder(builder_dir, apks):
     return copied
 
 
+def patch_imagebuilder_for_untrusted_apk(builder_dir, log):
+    patched = []
+    candidates = [builder_dir / "Makefile"]
+    include_dir = builder_dir / "include"
+    if include_dir.exists():
+        candidates.extend(include_dir.rglob("*.mk"))
+    patterns = [
+        (re.compile(r"(\$\(APK\)\s+add\s+)"), r"\1--allow-untrusted "),
+        (re.compile(r"(\bapk\s+add\s+)"), r"\1--allow-untrusted "),
+        (re.compile(r"(\S+/apk\s+add\s+)"), r"\1--allow-untrusted "),
+    ]
+    for path in candidates:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        new_lines = []
+        for line in text.splitlines(keepends=True):
+            if "--allow-untrusted" in line:
+                new_lines.append(line)
+                continue
+            for rx, repl in patterns:
+                line = rx.sub(repl, line)
+            new_lines.append(line)
+        new_text = "".join(new_lines)
+        if new_text != text:
+            path.write_text(new_text, encoding="utf-8")
+            patched.append(path.relative_to(builder_dir).as_posix())
+    if patched:
+        log("Patched ImageBuilder apk calls for untrusted APK support: " + ", ".join(patched))
+    else:
+        log("No ImageBuilder apk add calls were patched; passing allow-untrusted make flags as fallback")
+
+
 def extract_apk_overlay(apks, files_dir, log):
     files_dir.mkdir(parents=True, exist_ok=True)
     root = files_dir.resolve()
     for apk in apks:
+        if apk.suffix == ".apk":
+            log(f"Skipping APK overlay extraction; ImageBuilder will install package: {apk.name}")
+            continue
         log(f"Extracting untrusted APK overlay: {apk.name}")
         try:
             with tarfile.open(apk, "r:*") as tar:
@@ -675,6 +714,8 @@ def run_build(release, router_name=None, force=False):
             builder = ensure_imagebuilder(release, router, log)
             apks = download_external_apks(cfg, release, router, log)
             local_apks = copy_apks_to_builder(builder, apks)
+            if cfg.get("allow_untrusted_apk", True) and local_apks:
+                patch_imagebuilder_for_untrusted_apk(builder, log)
             files_dir = builder / "files"
             if cfg.get("allow_untrusted_apk", True):
                 extract_apk_overlay(local_apks, files_dir, log)
@@ -687,7 +728,15 @@ def run_build(release, router_name=None, force=False):
             env = os.environ.copy()
             if cfg.get("allow_untrusted_apk", True):
                 env["APK_FLAGS"] = "--allow-untrusted"
+                env["APK_ADD_FLAGS"] = "--allow-untrusted"
+                env["APK_OPTS"] = "--allow-untrusted"
                 env["OPENWRT_BUILDER_ALLOW_UNTRUSTED_APK"] = "1"
+                if local_apks:
+                    cmd.extend([
+                        "APK_FLAGS=--allow-untrusted",
+                        "APK_ADD_FLAGS=--allow-untrusted",
+                        "APK_OPTS=--allow-untrusted",
+                    ])
             log("Running: " + " ".join(cmd))
             with log_path.open("a", encoding="utf-8") as logfh:
                 proc = subprocess.run(cmd, cwd=builder, env=env, stdout=logfh, stderr=subprocess.STDOUT)
@@ -979,6 +1028,17 @@ INDEX_HTML = r"""<!doctype html>
     <h2>Задания</h2>
     <div id="jobs"></div>
   </section>
+  <section>
+    <div class="section-head">
+      <h2>Лог</h2>
+      <div class="row">
+        <button class="secondary" onclick="refreshSelectedLog()">Обновить лог</button>
+        <button class="secondary" onclick="copySelectedLog()">Копировать</button>
+      </div>
+    </div>
+    <div id="logTitle" class="muted">Выберите задание, чтобы открыть лог.</div>
+    <pre id="mainLog"></pre>
+  </section>
 </main>
 <footer>
   <div class="footer-bar">
@@ -1045,6 +1105,9 @@ let dirty = false;
 let deviceResultCache = [];
 let editingRouterIndex = null;
 let editingSourceIndex = null;
+let selectedLogUrl = '';
+let selectedLogLabel = '';
+let jobCache = [];
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -1337,6 +1400,38 @@ async function scanRepos() {
     </div>`).join('');
 }
 
+async function viewLog(url, label = '') {
+  selectedLogUrl = url;
+  selectedLogLabel = label || url;
+  logTitle.textContent = selectedLogLabel;
+  await refreshSelectedLog();
+}
+
+function viewJobLog(index) {
+  const job = jobCache[index];
+  if (job && job.log) viewLog(job.log, `${job.router} ${job.release}`);
+}
+
+async function refreshSelectedLog() {
+  if (!selectedLogUrl) return;
+  try {
+    const res = await fetch(selectedLogUrl, {cache: 'no-store'});
+    mainLog.textContent = await res.text();
+    mainLog.scrollTop = mainLog.scrollHeight;
+  } catch (e) {
+    mainLog.textContent = e.message;
+  }
+}
+
+async function copySelectedLog() {
+  const text = mainLog.textContent || '';
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
+  const old = logTitle.textContent;
+  logTitle.textContent = 'Лог скопирован в буфер обмена';
+  setTimeout(() => logTitle.textContent = old, 1200);
+}
+
 async function checkVersion() {
   versionStatus.textContent = 'Проверяю...';
   const info = await api('/api/version');
@@ -1364,7 +1459,15 @@ async function load() {
   if (!dirty) cfg = await api('/api/config');
   const st = await api('/api/status');
   latest.textContent = 'Latest: ' + (st.latest_release || 'unknown');
-  jobs.innerHTML = (st.jobs || []).map(j => `<div class="item"><b>${esc(j.router)} ${esc(j.release)}</b><span class="pill">${esc(j.status)}</span><span class="muted">${esc(j.updated_at)}</span>${j.output ? `<a href="${esc(j.output)}">firmware</a>` : ''}${j.error ? `<pre>${esc(j.error)}</pre>` : ''}<a href="${esc(j.log)}">log</a></div>`).join('');
+  const jobList = st.jobs || [];
+  jobCache = jobList;
+  jobs.innerHTML = jobList.map((j, i) => `<div class="item"><b>${esc(j.router)} ${esc(j.release)}</b><span class="pill">${esc(j.status)}</span><span class="muted">${esc(j.updated_at)}</span>${j.output ? `<a href="${esc(j.output)}">firmware</a>` : ''}${j.error ? `<pre>${esc(j.error)}</pre>` : ''}<button class="secondary" onclick="viewJobLog(${i})">Открыть лог</button></div>`).join('');
+  if (!selectedLogUrl) {
+    const running = jobList.find(j => j.status === 'running' && j.log);
+    if (running) viewLog(running.log, `${running.router} ${running.release}`);
+  } else {
+    refreshSelectedLog();
+  }
   if (!dirty) bindConfig();
 }
 load();
