@@ -26,6 +26,8 @@ LOG_DIR = DATA_DIR / "logs"
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
 DEVICE_CACHE = {}
+RELEASE_CACHE_TTL = 3600
+HTTP_TIMEOUT = int(os.environ.get("OWB_HTTP_TIMEOUT", "20"))
 
 DEFAULT_CONFIG = {
     "listen_host": "0.0.0.0",
@@ -87,13 +89,15 @@ def update_state(mutator):
     return current
 
 
-def http_get(url, timeout=45):
+def http_get(url, timeout=None):
+    if timeout is None:
+        timeout = HTTP_TIMEOUT
     req = urllib.request.Request(url, headers={"User-Agent": "local-openwrt-builder/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read(), dict(resp.headers)
 
 
-def http_text(url, timeout=45):
+def http_text(url, timeout=None):
     data, _ = http_get(url, timeout=timeout)
     return data.decode("utf-8", errors="replace")
 
@@ -113,16 +117,32 @@ def version_key(value):
     return [int(p) if p.isdigit() else p for p in parts]
 
 
-def latest_openwrt_release(branch_prefix):
-    text = http_text("https://downloads.openwrt.org/releases/")
-    versions = []
-    for link in parse_links(text):
-        name = link.strip("/")
-        if name.startswith(branch_prefix) and re.match(r"^\d+\.\d+(?:\.\d+)?$", name):
-            versions.append(name)
-    if not versions:
-        raise RuntimeError(f"No OpenWrt releases found for prefix {branch_prefix!r}")
-    return sorted(versions, key=version_key)[-1]
+def latest_openwrt_release(branch_prefix, timeout=None, allow_stale_cache=True):
+    cache_key = ("latest_release", branch_prefix)
+    cached = DEVICE_CACHE.get(cache_key)
+    now = time.time()
+    if cached and now - cached.get("ts", 0) < RELEASE_CACHE_TTL:
+        return cached["release"]
+    try:
+        text = http_text("https://downloads.openwrt.org/releases/", timeout=timeout)
+        versions = []
+        for link in parse_links(text):
+            name = link.strip("/")
+            if name.startswith(branch_prefix) and re.match(r"^\d+\.\d+(?:\.\d+)?$", name):
+                versions.append(name)
+        if not versions:
+            raise RuntimeError(f"No OpenWrt releases found for prefix {branch_prefix!r}")
+        release = sorted(versions, key=version_key)[-1]
+        DEVICE_CACHE[cache_key] = {"release": release, "ts": now}
+        return release
+    except Exception:
+        if allow_stale_cache and cached:
+            return cached["release"]
+        st = state()
+        fallback = st.get("latest_release") or st.get("built_release")
+        if allow_stale_cache and fallback:
+            return fallback
+        raise
 
 
 def title_to_text(title):
@@ -179,8 +199,15 @@ def load_profiles_json(release, target_path):
 
 def search_devices(query, limit=20):
     cfg = config()
-    release = latest_openwrt_release(cfg.get("release_branch_prefix", "25."))
-    overview = load_release_overview(release)
+    try:
+        release = latest_openwrt_release(cfg.get("release_branch_prefix", "25."), timeout=10, allow_stale_cache=True)
+        overview = load_release_overview(release)
+    except Exception as exc:
+        return {
+            "release": None,
+            "devices": [],
+            "error": f"Cannot load OpenWrt device index: {exc}",
+        }
     words = [w.lower() for w in re.split(r"\s+", query.strip()) if w.strip()]
     if not words:
         return {"release": release, "devices": []}
@@ -571,7 +598,7 @@ def run_build(release, router_name=None, force=False):
 
 def check_and_build(force=False, router_name=None):
     cfg = config()
-    release = latest_openwrt_release(cfg.get("release_branch_prefix", "25."))
+    release = latest_openwrt_release(cfg.get("release_branch_prefix", "25."), allow_stale_cache=False)
 
     def mutate(st):
         st["last_check"] = utc_now()
@@ -868,6 +895,10 @@ function addDeviceRouterByIndex(index) {
 }
 
 function renderDeviceResults(report) {
+  if (report.error) {
+    deviceResults.innerHTML = '<div class="item"><b>Не удалось загрузить список устройств</b><div class="muted">' + esc(report.error) + '</div></div>';
+    return;
+  }
   const devices = report.devices || [];
   deviceResultCache = devices;
   deviceResults.innerHTML = devices.length ? devices.map((d, i) => `
@@ -986,7 +1017,10 @@ class Handler(BaseHTTPRequestHandler):
                 limit = int(params.get("limit", ["20"])[0])
             except ValueError:
                 limit = 20
-            self.send(200, search_devices(query, limit=max(1, min(limit, 50))))
+            try:
+                self.send(200, search_devices(query, limit=max(1, min(limit, 50))))
+            except Exception as exc:
+                self.send(200, {"release": None, "devices": [], "error": str(exc)})
         elif path in ["/api/overview", "/api/v1/overview", "/json/v1/overview.json"]:
             self.send(200, asu_overview())
         elif path.startswith("/logs/"):
