@@ -25,6 +25,8 @@ OUTPUT_DIR = DATA_DIR / "firmware"
 LOG_DIR = DATA_DIR / "logs"
 CONFIG_PATH = DATA_DIR / "config.json"
 STATE_PATH = DATA_DIR / "state.json"
+REPO_FULL_NAME = os.environ.get("OWB_REPO", "nick2ld/openwrt-builder")
+REPO_URL = f"https://github.com/{REPO_FULL_NAME}"
 DEVICE_CACHE = {}
 RELEASE_CACHE_TTL = 3600
 HTTP_TIMEOUT = int(os.environ.get("OWB_HTTP_TIMEOUT", "20"))
@@ -70,6 +72,13 @@ def write_json(path, value):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def read_text_file(path):
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
 
 
 def config():
@@ -261,6 +270,52 @@ def search_devices(query, limit=20):
         except Exception:
             pass
     return {"release": release, "devices": matches}
+
+
+def installed_version_info():
+    return {
+        "repo": REPO_FULL_NAME,
+        "repo_url": REPO_URL,
+        "branch": read_text_file(APP_DIR / "VERSION") or "main",
+        "commit": read_text_file(APP_DIR / "COMMIT"),
+    }
+
+
+def latest_repo_commit(branch="main"):
+    url = f"https://api.github.com/repos/{REPO_FULL_NAME}/commits/{branch}"
+    data = json.loads(http_text(url, timeout=10))
+    return data.get("sha", "")
+
+
+def version_status():
+    info = installed_version_info()
+    latest = ""
+    error = ""
+    try:
+        latest = latest_repo_commit("main")
+    except Exception as exc:
+        error = str(exc)
+    current = info.get("commit") or ""
+    return {
+        **info,
+        "latest_commit": latest,
+        "update_available": bool(current and latest and current != latest),
+        "current_short": current[:7] if current else "",
+        "latest_short": latest[:7] if latest else "",
+        "error": error,
+    }
+
+
+def run_self_update():
+    log_path = LOG_DIR / "self-update.log"
+    cmd = "sudo /usr/local/sbin/openwrt-builder-update"
+    with log_path.open("a", encoding="utf-8") as logfh:
+        logfh.write(f"[{utc_now()}] Running self update\n")
+        subprocess.Popen(["bash", "-lc", cmd], stdout=logfh, stderr=subprocess.STDOUT, start_new_session=True)
+
+    def mutate(st):
+        st["self_update"] = {"started_at": utc_now(), "log": "/logs/self-update.log"}
+    update_state(mutate)
 
 
 def sha256_file(path):
@@ -791,6 +846,11 @@ INDEX_HTML = r"""<!doctype html>
     .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; background: var(--success); }
     code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; }
     pre { white-space: pre-wrap; background: #202124; color: #e8eaed; padding: 14px; border-radius: 8px; max-height: 260px; overflow: auto; }
+    footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 28px; color: var(--muted); }
+    .footer-bar { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 1px 2px rgba(60,64,67,.06); }
+    .footer-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    a { color: var(--primary); text-decoration: none; font-weight: 700; }
+    a:hover { text-decoration: underline; }
     @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .topbar, main { padding-left: 16px; padding-right: 16px; } .topbar { display: grid; height: auto; padding-top: 14px; padding-bottom: 14px; } .toolbar, .section-head { align-items: stretch; } }
   </style>
 </head>
@@ -855,6 +915,18 @@ INDEX_HTML = r"""<!doctype html>
     <div id="jobs"></div>
   </section>
 </main>
+<footer>
+  <div class="footer-bar">
+    <div class="footer-meta">
+      <a id="repoLink" href="https://github.com/nick2ld/openwrt-builder" target="_blank" rel="noreferrer">GitHub</a>
+      <span id="versionStatus">Проверка версии...</span>
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="checkVersion()">Проверить версию</button>
+      <button onclick="runUpdate()">Обновить</button>
+    </div>
+  </div>
+</footer>
 <div id="routerModal" class="modal-backdrop">
   <div class="modal">
     <div class="modal-head">
@@ -1200,6 +1272,27 @@ async function scanRepos() {
     </div>`).join('');
 }
 
+async function checkVersion() {
+  versionStatus.textContent = 'Проверяю...';
+  const info = await api('/api/version');
+  repoLink.href = info.repo_url;
+  const current = info.current_short || 'unknown';
+  const latest = info.latest_short || 'unknown';
+  if (info.error) {
+    versionStatus.textContent = `Версия: ${current}; не удалось проверить latest: ${info.error}`;
+  } else if (info.update_available) {
+    versionStatus.textContent = `Доступно обновление: ${current} → ${latest}`;
+  } else {
+    versionStatus.textContent = `Актуальная версия: ${current}`;
+  }
+}
+
+async function runUpdate() {
+  versionStatus.textContent = 'Запускаю обновление...';
+  await api('/api/update', {method:'POST'});
+  versionStatus.textContent = 'Обновление запущено. Сервис перезапустится, обновите страницу через 10-20 секунд.';
+}
+
 async function load() {
   if (!dirty) cfg = await api('/api/config');
   const st = await api('/api/status');
@@ -1208,6 +1301,7 @@ async function load() {
   if (!dirty) bindConfig();
 }
 load();
+checkVersion();
 setInterval(load, 15000);
 </script>
 </body>
@@ -1244,6 +1338,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, config())
         elif path == "/api/status":
             self.send(200, state())
+        elif path == "/api/version":
+            self.send(200, version_status())
         elif path == "/api/devices":
             params = urllib.parse.parse_qs(parsed.query)
             query = params.get("q", [""])[0]
@@ -1305,6 +1401,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send(202, {"status": "queued"})
         elif path == "/api/scan-packages":
             self.send(200, scan_repositories())
+        elif path == "/api/update":
+            run_self_update()
+            self.send(202, {"status": "started", "log": "/logs/self-update.log"})
         elif path in ["/api/v1/build", "/api/build-request"]:
             body = self.read_body()
             board = body.get("profile") or body.get("board") or body.get("target")

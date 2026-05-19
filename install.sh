@@ -9,6 +9,8 @@ DATA_DIR="${DATA_DIR:-/var/lib/openwrt-builder}"
 PORT="${PORT:-8088}"
 SERVICE_NAME="${SERVICE_NAME:-openwrt-builder}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+UPDATER_FILE="/usr/local/sbin/openwrt-builder-update"
+SUDOERS_FILE="/etc/sudoers.d/openwrt-builder-update"
 TMPDIR=""
 
 log() {
@@ -53,6 +55,7 @@ apt_install() {
     libncurses-dev libssl-dev zlib1g-dev
     libelf-dev libtool autoconf automake
     flex bison
+    sudo
   )
 
   log "installing build and runtime dependencies"
@@ -118,6 +121,12 @@ install_files() {
   install -m 0755 "$SOURCE_DIR/app.py" "$APP_DIR/app.py"
   install -m 0644 "$SOURCE_DIR/README.md" "$APP_DIR/README.md" 2>/dev/null || true
   install -m 0644 "$SOURCE_DIR/example-config.json" "$APP_DIR/example-config.json" 2>/dev/null || true
+  printf '%s\n' "${REF}" >"$APP_DIR/VERSION"
+  if [ -d "$SOURCE_DIR/.git" ]; then
+    git -C "$SOURCE_DIR" rev-parse HEAD >"$APP_DIR/COMMIT" 2>/dev/null || true
+  elif [ -n "${SOURCE_COMMIT:-}" ]; then
+    printf '%s\n' "$SOURCE_COMMIT" >"$APP_DIR/COMMIT"
+  fi
 
   log "installing systemd service"
   install -m 0644 "$SOURCE_DIR/openwrt-builder.service" "$SERVICE_FILE"
@@ -129,6 +138,23 @@ install_files() {
     "$SERVICE_FILE"
 
   chown -R "$APP_USER:$APP_USER" "$APP_DIR" "$DATA_DIR"
+}
+
+install_updater() {
+  log "installing root updater helper"
+  cat >"$UPDATER_FILE" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | REPO="${REPO}" REF="main" APP_USER="${APP_USER}" APP_DIR="${APP_DIR}" DATA_DIR="${DATA_DIR}" PORT="${PORT}" SERVICE_NAME="${SERVICE_NAME}" bash
+EOF
+  chmod 0755 "$UPDATER_FILE"
+  chown root:root "$UPDATER_FILE"
+
+  cat >"$SUDOERS_FILE" <<EOF
+${APP_USER} ALL=(root) NOPASSWD: ${UPDATER_FILE}
+EOF
+  chmod 0440 "$SUDOERS_FILE"
+  visudo -cf "$SUDOERS_FILE" >/dev/null
 }
 
 configure_defaults() {
@@ -226,6 +252,7 @@ main() {
   stop_service_if_exists
   backup_current_install
   install_files
+  install_updater
   configure_defaults
   start_service
   print_summary
