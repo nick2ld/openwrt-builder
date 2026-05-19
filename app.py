@@ -1164,6 +1164,10 @@ INDEX_HTML = r"""<!doctype html>
   <section>
     <div class="section-head">
       <h2>Основные настройки</h2>
+      <div class="row">
+        <span id="settingsSaveStatus" class="muted">Автосохранение включено</span>
+        <button onclick="save()">Сохранить настройки</button>
+      </div>
     </div>
     <div class="grid">
       <label>Публичный URL сервера <input id="public_base_url" oninput="scheduleSave()"></label>
@@ -1370,6 +1374,7 @@ function pullForm() {
 
 function scheduleSave() {
   dirty = true;
+  settingsSaveStatus.textContent = 'Есть несохраненные изменения';
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, 800);
 }
@@ -1552,9 +1557,16 @@ function deleteSource(index) {
 async function save() {
   clearTimeout(saveTimer);
   pullForm();
-  await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
-  dirty = false;
-  await load();
+  settingsSaveStatus.textContent = 'Сохраняю...';
+  try {
+    await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
+    dirty = false;
+    settingsSaveStatus.textContent = 'Сохранено';
+    await load();
+  } catch (e) {
+    settingsSaveStatus.textContent = 'Ошибка сохранения: ' + e.message;
+    throw e;
+  }
 }
 
 async function buildNow(router) {
