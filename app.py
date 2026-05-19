@@ -1031,6 +1031,8 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
                 else:
                     shutil.rmtree(latest_dir)
             shutil.copytree(dest_dir, latest_dir)
+            log(f"Firmware ready: /firmware/{name}/{release}/{dest_image.name}")
+            log(f"Build completed successfully: {dest_image.name}")
             set_job("success", {"output": f"/firmware/{name}/{release}/{dest_image.name}"})
         except Exception as exc:
             log(f"ERROR: {exc}")
@@ -1821,13 +1823,14 @@ function renderJob(job, index) {
   const error = job.error ? `<div class="muted">${esc(job.error)}</div>` : '';
   const canCancel = ['queued','running','downloading','checking','building','publishing','waiting_apks'].includes(job.status);
   const cancel = canCancel ? `<button class="danger" onclick="cancelJob(${index})">Остановить</button>` : '';
+  const finalLine = job.status === 'success' && job.output ? `Готово: ${job.output}` : (job.last_line || 'Лог пока пустой');
   return `<div class="item">
     <div class="job-head">
       <div><b>${esc(job.router)} ${esc(job.release)}</b><div class="muted">${esc(job.updated_at || '')}</div></div>
       <span class="pill">${esc(job.status)}</span>
     </div>
     <div class="progress"><span style="width:${progress}%"></span></div>
-    <div class="last-line">${esc(job.last_line || 'Лог пока пустой')}</div>
+    <div class="last-line">${esc(finalLine)}</div>
     ${error}
     <div class="row">${output}<button class="secondary" onclick="viewJobLog(${index})">Лог</button>${cancel}</div>
   </div>`;
