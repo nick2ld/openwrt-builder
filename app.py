@@ -167,6 +167,17 @@ def profile_display_name(profile_id, profile):
     return profile_id.replace("_", " ").replace(",", " ")
 
 
+def merge_packages(*groups):
+    result = []
+    seen = set()
+    for group in groups:
+        for package in split_packages(group):
+            if package not in seen:
+                seen.add(package)
+                result.append(package)
+    return result
+
+
 def split_target_path(target_path):
     parts = str(target_path or "").strip("/").split("/")
     if len(parts) >= 2:
@@ -237,8 +248,15 @@ def search_devices(query, limit=20):
         try:
             profiles_json = load_profiles_json(release, match["target_path"])
             profile = profiles_json.get("profiles", {}).get(match["profile"], {})
+            packages = merge_packages(
+                profiles_json.get("default_packages", []),
+                profiles_json.get("target_packages", []),
+                profile.get("device_packages", []),
+                profile.get("packages", []),
+                ["luci", "luci-app-attendedsysupgrade"],
+            )
             match["arch"] = profiles_json.get("arch_packages", "")
-            match["packages"] = " ".join(profile.get("device_packages", []) or [])
+            match["packages"] = " ".join(packages)
             match["name"] = profile_display_name(match["profile"], profile)
         except Exception:
             pass
@@ -728,6 +746,11 @@ INDEX_HTML = r"""<!doctype html>
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .item { border: 1px solid #dfe5ef; border-radius: 8px; padding: 12px; display: grid; gap: 10px; margin-bottom: 10px; }
+    details.item { display: block; }
+    summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+    summary::-webkit-details-marker { display: none; }
+    .details-body { display: grid; gap: 10px; margin-top: 12px; }
+    textarea.packages { min-height: 160px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.45; }
     .muted { color: #64748b; font-size: 13px; }
     .pill { display: inline-flex; background: #eef4ff; color: #245aa3; border-radius: 999px; padding: 4px 8px; font-size: 12px; }
     pre { white-space: pre-wrap; background: #0f172a; color: #dbeafe; padding: 12px; border-radius: 8px; max-height: 260px; overflow: auto; }
@@ -802,7 +825,12 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 
 function renderRouters() {
   routers.innerHTML = (cfg.routers || []).map((r, i) => `
-    <div class="item">
+    <details class="item" open>
+      <summary>
+        <span><b>${esc(r.name || 'router')}</b> <span class="pill">${esc(r.profile || 'profile')}</span></span>
+        <span class="muted">${esc(r.target || '?')}/${esc(r.subtarget || '?')} · ${esc(r.arch || 'arch?')}</span>
+      </summary>
+      <div class="details-body">
       <div class="grid">
         <label>Название <input value="${esc(r.name)}" oninput="cfg.routers[${i}].name=this.value; scheduleSave()"></label>
         <label>Target <input value="${esc(r.target)}" placeholder="mediatek" oninput="cfg.routers[${i}].target=this.value; scheduleSave()"></label>
@@ -813,9 +841,10 @@ function renderRouters() {
         <label>Arch APK <input value="${esc(r.arch)}" placeholder="aarch64_cortex-a53" oninput="cfg.routers[${i}].arch=this.value; scheduleSave()"></label>
         <label>Включен <select onchange="cfg.routers[${i}].enabled=this.value==='true'; scheduleSave()"><option value="true" ${r.enabled!==false?'selected':''}>Да</option><option value="false" ${r.enabled===false?'selected':''}>Нет</option></select></label>
       </div>
-      <label>Индивидуальные пакеты ImageBuilder для этого роутера <textarea oninput="cfg.routers[${i}].packages=this.value; scheduleSave()">${esc(r.packages)}</textarea></label>
+      <label>Пакеты прошивки для этого роутера <textarea class="packages" spellcheck="false" oninput="cfg.routers[${i}].packages=this.value; scheduleSave()">${esc(r.packages)}</textarea></label>
       <div class="row"><button class="danger" onclick="cfg.routers.splice(${i},1);renderRouters(); save()">Удалить</button><button class="secondary" onclick="buildNow('${esc(r.name)}')">Собрать этот</button></div>
-    </div>`).join('');
+      </div>
+    </details>`).join('');
 }
 
 function renderSources() {
@@ -880,7 +909,7 @@ function addDeviceRouter(device) {
     subtarget: device.subtarget || '',
     profile: device.profile || '',
     arch: device.arch || '',
-    packages: 'luci luci-ssl luci-app-attendedsysupgrade owut',
+    packages: device.packages || 'luci luci-app-attendedsysupgrade',
     enabled: true
   });
   deviceResults.innerHTML = '';
