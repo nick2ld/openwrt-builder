@@ -37,6 +37,8 @@ systemctl status openwrt-builder
 journalctl -u openwrt-builder -f
 ```
 
+Повторный запуск той же команды обновляет приложение до свежей версии из `main`: установщик скачает актуальные файлы, остановит `openwrt-builder`, сохранит текущий `/var/lib/openwrt-builder/config.json` и данные, сделает backup старого `/opt/openwrt-builder` в `/var/lib/openwrt-builder/backups/`, обновит приложение и снова запустит сервис.
+
 Откройте веб-интерфейс:
 
 ```text

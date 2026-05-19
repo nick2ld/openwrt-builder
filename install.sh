@@ -169,6 +169,30 @@ start_service() {
   systemctl enable --now "$SERVICE_NAME"
 }
 
+stop_service_if_exists() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  if systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+      log "stopping ${SERVICE_NAME}"
+      systemctl stop "$SERVICE_NAME"
+    fi
+  fi
+}
+
+backup_current_install() {
+  if [ ! -d "$APP_DIR" ]; then
+    return
+  fi
+  local stamp backup_dir
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  backup_dir="${DATA_DIR}/backups/app-${stamp}"
+  log "backing up current app to ${backup_dir}"
+  install -d -m 0750 "$(dirname "$backup_dir")"
+  mkdir -p "$backup_dir"
+  cp -a "$APP_DIR/." "$backup_dir/"
+  chown -R "$APP_USER:$APP_USER" "$(dirname "$backup_dir")" 2>/dev/null || true
+}
+
 print_summary() {
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -199,6 +223,8 @@ main() {
 
   apt_install
   download_source "$TMPDIR"
+  stop_service_if_exists
+  backup_current_install
   install_files
   configure_defaults
   start_service
