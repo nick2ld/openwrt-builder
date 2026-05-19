@@ -1451,8 +1451,9 @@ async function checkVersion() {
 
 async function runUpdate() {
   versionStatus.textContent = 'Запускаю обновление...';
-  await api('/api/update', {method:'POST'});
+  const result = await api('/api/update', {method:'POST'});
   versionStatus.textContent = 'Обновление запущено. Сервис перезапустится, обновите страницу через 10-20 секунд.';
+  if (result.log) viewLog(result.log, 'Обновление приложения');
 }
 
 async function load() {

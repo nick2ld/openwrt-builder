@@ -11,6 +11,7 @@ SERVICE_NAME="${SERVICE_NAME:-openwrt-builder}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 UPDATER_FILE="/usr/local/sbin/openwrt-builder-update"
 SUDOERS_FILE="/etc/sudoers.d/openwrt-builder-update"
+UPDATE_SCRIPT_FILE="/usr/local/sbin/openwrt-builder-update-run"
 TMPDIR=""
 
 log() {
@@ -153,10 +154,18 @@ install_files() {
 
 install_updater() {
   log "installing root updater helper"
-  cat >"$UPDATER_FILE" <<EOF
+  cat >"$UPDATE_SCRIPT_FILE" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
 curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | REPO="${REPO}" REF="main" APP_USER="${APP_USER}" APP_DIR="${APP_DIR}" DATA_DIR="${DATA_DIR}" PORT="${PORT}" SERVICE_NAME="${SERVICE_NAME}" bash
+EOF
+  chmod 0755 "$UPDATE_SCRIPT_FILE"
+  chown root:root "$UPDATE_SCRIPT_FILE"
+
+  cat >"$UPDATER_FILE" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+exec systemd-run --unit=openwrt-builder-self-update --collect --same-dir --property=Type=oneshot --property=StandardOutput=append:${DATA_DIR}/logs/self-update.log --property=StandardError=append:${DATA_DIR}/logs/self-update.log ${UPDATE_SCRIPT_FILE}
 EOF
   chmod 0755 "$UPDATER_FILE"
   chown root:root "$UPDATER_FILE"
