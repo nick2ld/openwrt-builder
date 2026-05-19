@@ -147,6 +147,7 @@ install_files() {
     -e "s#^WorkingDirectory=.*#WorkingDirectory=${APP_DIR}#" \
     -e "s#^Environment=OWB_DATA=.*#Environment=OWB_DATA=${DATA_DIR}#" \
     -e "s#^ExecStart=.*#ExecStart=/usr/bin/python3 ${APP_DIR}/app.py#" \
+    -e "s#^NoNewPrivileges=.*#NoNewPrivileges=false#" \
     "$SERVICE_FILE"
 
   chown -R "$APP_USER:$APP_USER" "$APP_DIR" "$DATA_DIR"

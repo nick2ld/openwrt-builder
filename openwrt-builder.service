@@ -11,7 +11,7 @@ Environment=OWB_DATA=/var/lib/openwrt-builder
 ExecStart=/usr/bin/python3 /opt/openwrt-builder/app.py
 Restart=on-failure
 RestartSec=10
-NoNewPrivileges=true
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target

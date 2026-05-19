@@ -39,6 +39,8 @@ journalctl -u openwrt-builder -f
 
 Повторный запуск той же команды обновляет приложение до свежей версии из `main`: установщик скачает актуальные файлы, остановит `openwrt-builder`, сохранит текущий `/var/lib/openwrt-builder/config.json` и данные, сделает backup старого `/opt/openwrt-builder` в `/var/lib/openwrt-builder/backups/`, обновит приложение и снова запустит сервис.
 
+Кнопка обновления в веб-интерфейсе использует root-helper через `sudo` и `systemd-run`. Поэтому systemd-unit сервиса устанавливается с `NoNewPrivileges=false`; иначе LXC/Debian блокирует `sudo` сообщением про флаг `без новых привилегий`.
+
 Откройте веб-интерфейс:
 
 ```text
