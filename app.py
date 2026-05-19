@@ -731,48 +731,90 @@ INDEX_HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenWrt Builder</title>
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #f5f7fb; color: #172033; }
-    header { background: #152033; color: white; padding: 18px 24px; display: flex; gap: 16px; justify-content: space-between; align-items: center; }
-    main { max-width: 1180px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
-    section { background: white; border: 1px solid #dfe5ef; border-radius: 8px; padding: 18px; }
-    h1 { font-size: 20px; margin: 0; }
-    h2 { font-size: 16px; margin: 0 0 12px; }
-    label { display: grid; gap: 6px; font-size: 13px; color: #45546d; }
-    input, textarea, select { width: 100%; box-sizing: border-box; border: 1px solid #c9d3e3; border-radius: 6px; padding: 9px 10px; font: inherit; background: white; }
-    textarea { min-height: 82px; resize: vertical; }
-    button { border: 0; border-radius: 6px; padding: 9px 13px; font-weight: 650; background: #1d6fd6; color: white; cursor: pointer; }
-    button.secondary { background: #e8edf5; color: #172033; }
-    button.danger { background: #bc2f43; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    :root {
+      --bg: #f8fafd;
+      --surface: #ffffff;
+      --surface-2: #f1f5fb;
+      --text: #1f1f1f;
+      --muted: #5f6368;
+      --border: #dfe3eb;
+      --primary: #1a73e8;
+      --primary-hover: #1558b0;
+      --primary-soft: #e8f0fe;
+      --danger: #b3261e;
+      --danger-soft: #fce8e6;
+      --success: #137333;
+      --shadow: 0 1px 2px rgba(60,64,67,.12), 0 8px 24px rgba(60,64,67,.08);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, Roboto, "Segoe UI", Arial, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+    header { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); }
+    .topbar { max-width: 1240px; margin: 0 auto; min-height: 72px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .brand-mark { width: 40px; height: 40px; border-radius: 8px; background: linear-gradient(135deg, #1a73e8, #34a853); color: white; display: grid; place-items: center; font-weight: 800; letter-spacing: 0; box-shadow: 0 8px 18px rgba(26,115,232,.22); }
+    h1 { font-size: 19px; line-height: 1.2; margin: 0; font-weight: 700; }
+    .brand-subtitle { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    main { max-width: 1240px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
+    section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(60,64,67,.06); }
+    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+    h2 { font-size: 16px; line-height: 1.3; margin: 0; font-weight: 700; }
+    label { display: grid; gap: 7px; font-size: 12px; color: var(--muted); font-weight: 650; }
+    input, textarea, select { width: 100%; border: 1px solid #c7d0dd; border-radius: 8px; padding: 11px 12px; font: inherit; color: var(--text); background: #fff; outline: none; transition: border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+    input:focus, textarea:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(26,115,232,.14); }
+    textarea { min-height: 92px; resize: vertical; }
+    button { border: 0; border-radius: 8px; padding: 10px 15px; font: inherit; font-size: 13px; font-weight: 700; background: var(--primary); color: white; cursor: pointer; transition: background .15s ease, box-shadow .15s ease, transform .08s ease; }
+    button:hover { background: var(--primary-hover); box-shadow: 0 3px 10px rgba(26,115,232,.18); }
+    button:active { transform: translateY(1px); }
+    button.secondary { background: var(--primary-soft); color: #174ea6; }
+    button.secondary:hover { background: #d2e3fc; box-shadow: none; }
+    button.danger { background: var(--danger-soft); color: var(--danger); }
+    button.danger:hover { background: #fad2cf; box-shadow: none; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .item { border: 1px solid #dfe5ef; border-radius: 8px; padding: 12px; display: grid; gap: 10px; margin-bottom: 10px; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; border-bottom: 1px solid #e6edf6; padding: 10px 8px; vertical-align: middle; }
-    th { font-size: 12px; color: #64748b; font-weight: 700; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+    .item { border: 1px solid var(--border); border-radius: 8px; padding: 14px; display: grid; gap: 10px; margin-bottom: 10px; background: #fff; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; background: #fff; }
+    th, td { text-align: left; border-bottom: 1px solid #edf1f7; padding: 13px 14px; vertical-align: middle; }
+    tr:last-child td { border-bottom: 0; }
+    th { font-size: 11px; color: var(--muted); font-weight: 800; text-transform: uppercase; letter-spacing: .04em; background: #f8fafd; }
+    tbody tr:hover { background: #f8fbff; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, .48); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 20; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(32,33,36,.46); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 20; }
     .modal-backdrop.open { display: flex; }
-    .modal { width: min(980px, 100%); max-height: 92vh; overflow: auto; background: white; border-radius: 8px; border: 1px solid #c9d3e3; padding: 18px; display: grid; gap: 14px; }
-    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .modal-head h2 { margin: 0; }
-    textarea.packages { min-height: 160px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.45; }
-    .muted { color: #64748b; font-size: 13px; }
-    .pill { display: inline-flex; background: #eef4ff; color: #245aa3; border-radius: 999px; padding: 4px 8px; font-size: 12px; }
-    pre { white-space: pre-wrap; background: #0f172a; color: #dbeafe; padding: 12px; border-radius: 8px; max-height: 260px; overflow: auto; }
-    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } header { display: grid; } }
+    .modal { width: min(980px, 100%); max-height: 92vh; overflow: auto; background: white; border-radius: 8px; border: 1px solid var(--border); box-shadow: var(--shadow); padding: 20px; display: grid; gap: 16px; }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 4px; }
+    .modal-head h2 { margin: 0; font-size: 19px; }
+    textarea.packages { min-height: 190px; font-family: "Roboto Mono", ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.5; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .pill { display: inline-flex; align-items: center; background: var(--primary-soft); color: #174ea6; border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 700; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; background: var(--success); }
+    code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; }
+    pre { white-space: pre-wrap; background: #202124; color: #e8eaed; padding: 14px; border-radius: 8px; max-height: 260px; overflow: auto; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .topbar, main { padding-left: 16px; padding-right: 16px; } .topbar { display: grid; height: auto; padding-top: 14px; padding-bottom: 14px; } .toolbar, .section-head { align-items: stretch; } }
   </style>
 </head>
 <body>
 <header>
-  <h1>OpenWrt 25.x Local ImageBuilder</h1>
-  <div class="row">
-    <span id="latest" class="pill">...</span>
-    <button onclick="buildNow()">Собрать сейчас</button>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">OW</div>
+      <div>
+        <h1>OpenWrt Builder</h1>
+        <div class="brand-subtitle">Локальная сборка прошивок для OpenWrt 25.x</div>
+      </div>
+    </div>
+    <div class="row">
+      <span id="latest" class="pill"><span class="status-dot"></span>...</span>
+      <button onclick="buildNow()">Собрать сейчас</button>
+    </div>
   </div>
 </header>
 <main>
   <section>
-    <h2>Основные настройки</h2>
+    <div class="section-head">
+      <h2>Основные настройки</h2>
+    </div>
     <div class="grid">
       <label>Публичный URL сервера <input id="public_base_url" oninput="scheduleSave()"></label>
       <label>Ветка релизов <input id="release_branch_prefix" placeholder="25." oninput="scheduleSave()"></label>
@@ -781,26 +823,28 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </section>
   <section>
-    <div class="row" style="justify-content:space-between">
+    <div class="section-head">
       <h2>Роутеры</h2>
       <button class="secondary" onclick="openRouterModal()">Добавить роутер</button>
     </div>
     <div id="routers"></div>
   </section>
   <section>
-    <div class="row" style="justify-content:space-between">
+    <div class="section-head">
       <h2>Внешние APK / репозитории</h2>
       <button class="secondary" onclick="addSource()">Добавить источник</button>
     </div>
     <div id="sources"></div>
   </section>
   <section>
-    <div class="row">
-      <button onclick="save()">Сохранить</button>
-      <button class="secondary" onclick="load()">Обновить статус</button>
-      <button class="secondary" onclick="scanRepos()">Проверить репозитории</button>
+    <div class="toolbar">
+      <div class="row">
+        <button onclick="save()">Сохранить</button>
+        <button class="secondary" onclick="load()">Обновить статус</button>
+        <button class="secondary" onclick="scanRepos()">Проверить репозитории</button>
+      </div>
+      <p class="muted">Sysupgrade server: <code id="sysurl"></code></p>
     </div>
-    <p class="muted">Для LuCI Attended Sysupgrade укажите сервер: <code id="sysurl"></code></p>
   </section>
   <section>
     <h2>Проверка репозиториев</h2>
@@ -855,10 +899,11 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 function renderRouters() {
   const list = cfg.routers || [];
   if (!list.length) {
-    routers.innerHTML = '<div class="muted">Роутеры еще не добавлены.</div>';
+    routers.innerHTML = '<div class="item"><b>Роутеры еще не добавлены</b><div class="muted">Нажмите «Добавить роутер», найдите модель и сохраните профиль сборки.</div></div>';
     return;
   }
   routers.innerHTML = `
+    <div class="table-wrap">
     <table>
       <thead><tr><th>Название</th><th>Profile</th><th>Target</th><th>Arch</th><th></th></tr></thead>
       <tbody>
@@ -875,7 +920,8 @@ function renderRouters() {
             </div></td>
           </tr>`).join('')}
       </tbody>
-    </table>`;
+    </table>
+    </div>`;
 }
 
 function renderSources() {
