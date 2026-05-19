@@ -9,6 +9,7 @@ DATA_DIR="${DATA_DIR:-/var/lib/openwrt-builder}"
 PORT="${PORT:-8088}"
 SERVICE_NAME="${SERVICE_NAME:-openwrt-builder}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+TMPDIR=""
 
 log() {
   printf '[openwrt-builder] %s\n' "$*"
@@ -59,8 +60,12 @@ apt_install() {
 
   local optional=(python3-distutils python3-setuptools)
   for pkg in "${optional[@]}"; do
-    if apt-cache show "$pkg" >/dev/null 2>&1; then
+    local candidate
+    candidate="$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2}')"
+    if [ -n "$candidate" ] && [ "$candidate" != "(none)" ]; then
       apt-get install -y --no-install-recommends "$pkg"
+    else
+      log "optional package not available, skipping: $pkg"
     fi
   done
 }
@@ -189,12 +194,11 @@ EOF
 main() {
   need_root
   detect_os
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
+  TMPDIR="$(mktemp -d)"
+  trap 'if [ -n "${TMPDIR:-}" ]; then rm -rf "$TMPDIR"; fi' EXIT
 
   apt_install
-  download_source "$tmpdir"
+  download_source "$TMPDIR"
   install_files
   configure_defaults
   start_service
