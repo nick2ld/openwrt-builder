@@ -146,6 +146,7 @@ def read_log_response(file_path):
 
 def enriched_state():
     st = state()
+    cfg = config()
     jobs = []
     for job in st.get("jobs", []):
         item = dict(job)
@@ -153,6 +154,7 @@ def enriched_state():
         item["last_line"] = item.get("last_line") or last_log_line(item.get("log", ""))
         jobs.append(item)
     st["jobs"] = jobs
+    st["routers_status"] = router_statuses(cfg, st)
     return st
 
 
@@ -738,6 +740,136 @@ def firmware_manifest_path(router_name, release):
     return OUTPUT_DIR / router_name / release / "manifest.json"
 
 
+def firmware_history(router_name, limit=3):
+    root = OUTPUT_DIR / router_name
+    items = []
+    if not root.exists():
+        return []
+    for manifest_path in root.glob("*/manifest.json"):
+        if manifest_path.parent.name == "latest":
+            continue
+        manifest = read_json(manifest_path, {})
+        image_name = manifest.get("sysupgrade")
+        if not image_name:
+            continue
+        image_path = manifest_path.parent / image_name
+        if not image_path.exists():
+            continue
+        release = manifest.get("release") or manifest_path.parent.name
+        items.append({
+            "router": router_name,
+            "release": release,
+            "built_at": manifest.get("built_at") or "",
+            "name": image_name,
+            "sha256": manifest.get("sha256", ""),
+            "url": f"/firmware/{router_name}/{release}/{image_name}",
+        })
+    items.sort(key=lambda item: item.get("built_at") or item.get("release") or "", reverse=True)
+    return items[:limit]
+
+
+def prune_router_firmware(router_name, keep=3):
+    root = OUTPUT_DIR / router_name
+    if not root.exists():
+        return
+    keep_releases = {item["release"] for item in firmware_history(router_name, keep)}
+    for child in root.iterdir():
+        if child.name == "latest":
+            continue
+        if child.is_dir() and child.name not in keep_releases:
+            shutil.rmtree(child)
+
+
+def prune_jobs_state(keep_success_per_router=3):
+    st = state()
+    kept = []
+    success_count = {}
+    for job in st.get("jobs", []):
+        status = job.get("status")
+        router = job.get("router") or ""
+        if status in ["failed", "cancelled"]:
+            log_name = Path(str(job.get("log", ""))).name
+            if log_name:
+                try:
+                    (LOG_DIR / log_name).unlink()
+                except FileNotFoundError:
+                    pass
+            continue
+        if status == "success":
+            count = success_count.get(router, 0)
+            if count >= keep_success_per_router:
+                continue
+            success_count[router] = count + 1
+        kept.append(job)
+
+    def mutate(current):
+        current["jobs"] = kept[:100]
+    update_state(mutate)
+
+
+def prune_all_router_firmware(keep=3):
+    cfg = config()
+    for router in cfg.get("routers", []):
+        name = router.get("name")
+        if name:
+            prune_router_firmware(name, keep)
+
+
+def router_statuses(cfg=None, st=None):
+    cfg = cfg or config()
+    st = st or state()
+    latest = st.get("latest_release")
+    statuses = {}
+    active_statuses = ["queued", "running", "downloading", "checking", "building", "publishing"]
+    for router in cfg.get("routers", []):
+        name = router.get("name")
+        if not name:
+            continue
+        history = firmware_history(name, 3)
+        jobs = [j for j in st.get("jobs", []) if j.get("router") in [name, "all"]]
+        active = next((j for j in jobs if j.get("status") in active_statuses), None)
+        waiting = next((j for j in jobs if j.get("status") == "waiting_apks"), None)
+        success = next((j for j in jobs if j.get("status") == "success"), None)
+        if active:
+            statuses[name] = {
+                "state": "building",
+                "label": "Собирается",
+                "tooltip": active.get("last_line") or active.get("status"),
+                "job": active.get("id"),
+                "firmware": history,
+            }
+        elif waiting:
+            statuses[name] = {
+                "state": "missing_apks",
+                "label": "Нет APK",
+                "tooltip": waiting.get("error") or waiting.get("last_line") or "Нет необходимых APK",
+                "job": waiting.get("id"),
+                "firmware": history,
+            }
+        elif latest and firmware_manifest_path(name, latest).exists():
+            statuses[name] = {
+                "state": "no_new_versions",
+                "label": "Нет новых версий",
+                "tooltip": f"Последняя версия {latest} уже собрана",
+                "firmware": history,
+            }
+        elif success:
+            statuses[name] = {
+                "state": "success",
+                "label": "Успешно собрано",
+                "tooltip": success.get("output") or "Прошивка собрана",
+                "firmware": history,
+            }
+        else:
+            statuses[name] = {
+                "state": "idle",
+                "label": "Не собиралось",
+                "tooltip": "Для роутера еще нет успешной сборки",
+                "firmware": history,
+            }
+    return statuses
+
+
 def record_job(job_id, router, release, status, log_path, extra=None):
     def mutate(st):
         jobs = [j for j in st.get("jobs", []) if j.get("id") != job_id]
@@ -801,6 +933,7 @@ def cancel_job(job_id):
         except Exception:
             proc.terminate()
     record_job(job_id, router, release, "cancelled", log_path, {"error": "Cancelled by user"})
+    prune_jobs_state()
     return {"status": "cancelled", "id": job_id}
 
 
@@ -1050,9 +1183,12 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
             log(f"Firmware ready: /firmware/{name}/{release}/{dest_image.name}")
             log(f"Build completed successfully: {dest_image.name}")
             set_job("success", {"output": f"/firmware/{name}/{release}/{dest_image.name}"})
+            prune_router_firmware(name, keep=3)
+            prune_jobs_state()
         except Exception as exc:
             log(f"ERROR: {exc}")
             set_job("failed", {"error": str(exc)})
+            prune_jobs_state()
 
 
 def check_and_build(force=False, router_name=None):
@@ -1175,6 +1311,10 @@ def clear_old_jobs():
         st["cleanup_at"] = utc_now()
     update_state(mutate)
     return {"status": "ok", "cleaned_at": utc_now()}
+
+
+def firmware_history_response(router_name):
+    return {"router": router_name, "firmware": firmware_history(router_name, 3)}
 
 
 def asu_latest():
@@ -1475,6 +1615,15 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </div>
 </div>
+<div id="firmwareModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="firmwareModalTitle">Последние прошивки</h2>
+      <button class="secondary" onclick="closeFirmwareModal()">Закрыть</button>
+    </div>
+    <div id="firmwareLinks"></div>
+  </div>
+</div>
 <div id="logModal" class="modal-backdrop">
   <div class="modal log-modal">
     <div class="modal-head">
@@ -1499,6 +1648,7 @@ let editingSourceIndex = null;
 let selectedLogUrl = '';
 let selectedLogLabel = '';
 let jobCache = [];
+let routerStatusCache = {};
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -1517,20 +1667,23 @@ function renderRouters() {
   routers.innerHTML = `
     <div class="table-wrap">
     <table>
-      <thead><tr><th>Название</th><th>Profile</th><th>Target</th><th>Arch</th><th></th></tr></thead>
+      <thead><tr><th>Название</th><th>Статус</th><th>Profile</th><th>Target</th><th>Arch</th><th></th></tr></thead>
       <tbody>
         ${list.map((r, i) => `
+          ${(() => { const st = routerStatusCache[r.name] || {}; return `
           <tr>
             <td><b>${esc(r.name || 'router')}</b><div class="muted">${r.enabled === false ? 'выключен' : 'включен'}</div></td>
+            <td><span class="pill" title="${esc(st.tooltip || '')}">${esc(st.label || 'Неизвестно')}</span></td>
             <td>${esc(r.profile || '')}</td>
             <td>${esc(r.target || '')}/${esc(r.subtarget || '')}</td>
             <td>${esc(r.arch || '')}</td>
             <td><div class="actions">
               <button class="secondary" onclick="openRouterModal(${i})">Редактировать</button>
               <button class="secondary" onclick="buildRouterByIndex(${i})">Собрать</button>
+              <button class="secondary" onclick="openFirmwareModal(${i})">Прошивки</button>
               <button class="danger" onclick="deleteRouter(${i})">Удалить</button>
             </div></td>
-          </tr>`).join('')}
+          </tr>`})()}`).join('')}
       </tbody>
     </table>
     </div>`;
@@ -1673,6 +1826,30 @@ function deleteRouter(index) {
   cfg.routers.splice(index, 1);
   renderRouters();
   save();
+}
+
+async function openFirmwareModal(index) {
+  const router = (cfg.routers || [])[index];
+  if (!router) return;
+  firmwareModalTitle.textContent = `Последние прошивки: ${router.name}`;
+  firmwareLinks.innerHTML = '<div class="muted">Загружаю...</div>';
+  firmwareModal.classList.add('open');
+  try {
+    const report = await api('/api/router-firmware/' + encodeURIComponent(router.name));
+    const list = report.firmware || [];
+    firmwareLinks.innerHTML = list.length ? list.map(item => `
+      <div class="item">
+        <div><b>${esc(item.release)}</b><div class="muted">${esc(item.built_at || '')}</div></div>
+        <div><a href="${esc(item.url)}">${esc(item.name)}</a></div>
+        <div class="muted">${esc(item.sha256 || '')}</div>
+      </div>`).join('') : '<div class="item"><b>Прошивок пока нет</b><div class="muted">Успешные сборки появятся здесь автоматически.</div></div>';
+  } catch (e) {
+    firmwareLinks.innerHTML = '<div class="item"><b>Не удалось загрузить список</b><div class="muted">' + esc(e.message) + '</div></div>';
+  }
+}
+
+function closeFirmwareModal() {
+  firmwareModal.classList.remove('open');
 }
 
 function renderDeviceResults(report) {
@@ -1919,6 +2096,7 @@ async function load() {
   latest.textContent = 'Latest: ' + (st.latest_release || 'unknown');
   const jobList = st.jobs || [];
   jobCache = jobList;
+  routerStatusCache = st.routers_status || {};
   jobs.innerHTML = jobList.length ? jobList.map(renderJob).join('') : '<div class="item"><b>Заданий пока нет</b><div class="muted">Cron проверит новые версии автоматически, ручная сборка тоже появится здесь.</div></div>';
   if (selectedLogUrl && logModal.classList.contains('open')) {
     refreshSelectedLog();
@@ -1976,6 +2154,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, config())
         elif path == "/api/status":
             self.send(200, enriched_state())
+        elif path.startswith("/api/router-firmware/"):
+            router = urllib.parse.unquote(path[len("/api/router-firmware/"):])
+            self.send(200, firmware_history_response(router))
         elif path == "/api/version":
             self.send(200, version_status())
         elif path == "/api/devices":
@@ -2097,6 +2278,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ensure_dirs()
+    prune_all_router_firmware(keep=3)
+    prune_jobs_state()
     cfg = config()
     scheduler.start()
     server = ThreadingHTTPServer((cfg.get("listen_host", "0.0.0.0"), int(cfg.get("listen_port", 8088))), Handler)
