@@ -20,6 +20,7 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("OWB_DATA", APP_DIR / "data"))
+LOCALE_DIR = APP_DIR / "locales"
 DOWNLOAD_DIR = DATA_DIR / "downloads"
 BUILD_DIR = DATA_DIR / "builders"
 OUTPUT_DIR = DATA_DIR / "firmware"
@@ -1415,7 +1416,7 @@ INDEX_HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenWrt Builder</title>
+  <title>OpenWrt Custom Local Builder</title>
   <style>
     :root {
       --bg: #f8fafd;
@@ -1437,7 +1438,8 @@ INDEX_HTML = r"""<!doctype html>
     header { position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border); }
     .topbar { max-width: 1240px; margin: 0 auto; min-height: 72px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
     .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
-    .brand-mark { width: 40px; height: 40px; border-radius: 8px; background: linear-gradient(135deg, #1a73e8, #34a853); color: white; display: grid; place-items: center; font-weight: 800; letter-spacing: 0; box-shadow: 0 8px 18px rgba(26,115,232,.22); }
+    .brand-mark { width: 40px; height: 40px; border-radius: 8px; background: linear-gradient(135deg, #1a73e8, #34a853); color: white; display: grid; place-items: center; font-weight: 800; letter-spacing: 0; box-shadow: 0 8px 18px rgba(26,115,232,.22); text-decoration: none; }
+    .brand-mark:hover { text-decoration: none; }
     h1 { font-size: 19px; line-height: 1.2; margin: 0; font-weight: 700; }
     .brand-subtitle { margin-top: 3px; color: var(--muted); font-size: 12px; }
     main { max-width: 1240px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
@@ -1494,66 +1496,70 @@ INDEX_HTML = r"""<!doctype html>
 <header>
   <div class="topbar">
     <div class="brand">
-      <div class="brand-mark">OW</div>
+      <a class="brand-mark" href="/" title="Home" data-i18n-title="home">OW</a>
       <div>
-        <h1>OpenWrt Builder</h1>
-        <div class="brand-subtitle">Локальная сборка прошивок для OpenWrt 25.x</div>
+        <h1>OpenWrt Custom Local Builder</h1>
+        <div class="brand-subtitle" data-i18n="subtitle">Локальная сборка прошивок для OpenWrt 25.x</div>
       </div>
     </div>
     <div class="row">
       <span id="latest" class="pill"><span class="status-dot"></span>...</span>
-      <button onclick="buildNow()">Собрать сейчас</button>
+      <select id="languageSelect" onchange="setLanguage(this.value)" style="width:auto; min-width:82px">
+        <option value="ru">RU</option>
+        <option value="en">EN</option>
+      </select>
+      <button onclick="buildAllAvailable()" data-i18n="buildAllAvailable">Собрать все доступные прошивки</button>
     </div>
   </div>
 </header>
 <main>
   <section>
     <div class="section-head">
-      <h2>Основные настройки</h2>
+      <h2 data-i18n="mainSettings">Основные настройки</h2>
       <div class="row">
-        <span id="settingsSaveStatus" class="muted">Автосохранение включено</span>
-        <button onclick="save()">Сохранить настройки</button>
+        <span id="settingsSaveStatus" class="muted" data-i18n="autosaveEnabled">Автосохранение включено</span>
+        <button onclick="save()" data-i18n="saveSettings">Сохранить настройки</button>
       </div>
     </div>
     <div class="grid">
-      <label>Публичный URL сервера <input id="public_base_url" oninput="scheduleSave()"></label>
-      <label>Ветка релизов <input id="release_branch_prefix" placeholder="25." oninput="scheduleSave()"></label>
-      <label>Проверять каждые, минут <input id="check_interval_minutes" type="number" min="5" oninput="scheduleSave()"></label>
-      <label>Разрешить untrusted APK <select id="allow_untrusted_apk" onchange="scheduleSave()"><option value="true">Да</option><option value="false">Нет</option></select></label>
+      <label><span data-i18n="publicUrl">Публичный URL сервера</span> <input id="public_base_url" oninput="scheduleSave()"></label>
+      <label><span data-i18n="releaseBranch">Ветка релизов</span> <input id="release_branch_prefix" placeholder="25." oninput="scheduleSave()"></label>
+      <label><span data-i18n="checkEveryMinutes">Проверять каждые, минут</span> <input id="check_interval_minutes" type="number" min="5" oninput="scheduleSave()"></label>
+      <label><span data-i18n="allowUntrusted">Разрешить untrusted APK</span> <select id="allow_untrusted_apk" onchange="scheduleSave()"><option value="true" data-i18n="yes">Да</option><option value="false" data-i18n="no">Нет</option></select></label>
     </div>
   </section>
   <section>
     <div class="section-head">
-      <h2>Роутеры</h2>
-      <button class="secondary" onclick="openRouterModal()">Добавить роутер</button>
+      <h2 data-i18n="routers">Роутеры</h2>
+      <button class="secondary" onclick="openRouterModal()" data-i18n="addRouter">Добавить роутер</button>
     </div>
     <div id="routers"></div>
   </section>
   <section>
     <div class="section-head">
-      <h2>Внешние APK / репозитории</h2>
-      <button class="secondary" onclick="openSourceModal()">Добавить источник</button>
+      <h2 data-i18n="sources">Внешние APK / репозитории</h2>
+      <button class="secondary" onclick="openSourceModal()" data-i18n="addSource">Добавить источник</button>
     </div>
     <div id="sources"></div>
   </section>
   <section>
     <div class="toolbar">
       <div class="row">
-        <button onclick="save()">Сохранить</button>
-        <button class="secondary" onclick="load()">Обновить статус</button>
-        <button class="secondary" onclick="scanRepos()">Проверить репозитории</button>
+        <button onclick="save()" data-i18n="save">Сохранить</button>
+        <button class="secondary" onclick="load()" data-i18n="refreshStatus">Обновить статус</button>
+        <button class="secondary" onclick="scanRepos()" data-i18n="checkRepos">Проверить репозитории</button>
       </div>
       <p class="muted">Sysupgrade server: <code id="sysurl"></code></p>
     </div>
   </section>
   <section>
-    <h2>Проверка репозиториев</h2>
-    <div id="scan" class="muted">Еще не запускалась.</div>
+      <h2 data-i18n="repoCheck">Проверка репозиториев</h2>
+    <div id="scan" class="muted" data-i18n="notRunYet">Еще не запускалась.</div>
   </section>
   <section>
     <div class="section-head">
-      <h2>Задания</h2>
-      <button class="danger" onclick="cleanupJobs()">Очистить старые задания</button>
+      <h2 data-i18n="jobs">Задания</h2>
+      <button class="danger" onclick="cleanupJobs()" data-i18n="cleanupJobs">Очистить старые задания</button>
     </div>
     <div id="jobs"></div>
   </section>
@@ -1562,11 +1568,11 @@ INDEX_HTML = r"""<!doctype html>
   <div class="footer-bar">
     <div class="footer-meta">
       <a id="repoLink" href="https://github.com/nick2ld/openwrt-builder" target="_blank" rel="noreferrer">GitHub</a>
-      <span id="versionStatus">Проверка версии...</span>
+      <span id="versionStatus" data-i18n="checkingVersion">Проверка версии...</span>
     </div>
     <div class="row">
-      <button class="secondary" onclick="checkVersion()">Проверить версию</button>
-      <button onclick="runUpdate()">Обновить</button>
+      <button class="secondary" onclick="checkVersion()" data-i18n="checkVersion">Проверить версию</button>
+      <button onclick="runUpdate()" data-i18n="update">Обновить</button>
     </div>
   </div>
 </footer>
@@ -1574,24 +1580,24 @@ INDEX_HTML = r"""<!doctype html>
   <div class="modal">
     <div class="modal-head">
       <h2 id="routerModalTitle">Роутер</h2>
-      <button class="secondary" onclick="closeRouterModal()">Закрыть</button>
+      <button class="secondary" onclick="closeRouterModal()" data-i18n="close">Закрыть</button>
     </div>
-    <label>Поиск модели как в Firmware Selector <input id="modalDeviceSearch" placeholder="Например: Cudy WR3000, GL-MT6000, Archer C7" oninput="searchDevices()"></label>
+    <label><span data-i18n="deviceSearchLabel">Поиск модели как в Firmware Selector</span> <input id="modalDeviceSearch" placeholder="Например: Cudy WR3000, GL-MT6000, Archer C7" data-i18n-placeholder="deviceSearchPlaceholder" oninput="searchDevices()"></label>
     <div id="modalDeviceResults"></div>
     <div class="grid">
-      <label>Название <input id="routerName"></label>
+      <label><span data-i18n="name">Название</span> <input id="routerName"></label>
       <label>Target <input id="routerTarget" placeholder="mediatek"></label>
       <label>Subtarget <input id="routerSubtarget" placeholder="filogic"></label>
       <label>Profile <input id="routerProfile" placeholder="cudy_wr3000-v1"></label>
     </div>
     <div class="grid">
       <label>Arch APK <input id="routerArch" placeholder="aarch64_cortex-a53"></label>
-      <label>Включен <select id="routerEnabled"><option value="true">Да</option><option value="false">Нет</option></select></label>
+      <label><span data-i18n="enabled">Включен</span> <select id="routerEnabled"><option value="true" data-i18n="yes">Да</option><option value="false" data-i18n="no">Нет</option></select></label>
     </div>
-    <label>Пакеты прошивки для этого роутера <textarea id="routerPackages" class="packages" spellcheck="false"></textarea></label>
+    <label><span data-i18n="routerPackages">Пакеты прошивки для этого роутера</span> <textarea id="routerPackages" class="packages" spellcheck="false"></textarea></label>
     <div class="row">
-      <button onclick="saveRouterModal()">Сохранить роутер</button>
-      <button class="secondary" onclick="closeRouterModal()">Отмена</button>
+      <button onclick="saveRouterModal()" data-i18n="saveRouter">Сохранить роутер</button>
+      <button class="secondary" onclick="closeRouterModal()" data-i18n="cancel">Отмена</button>
     </div>
   </div>
 </div>
@@ -1599,19 +1605,19 @@ INDEX_HTML = r"""<!doctype html>
   <div class="modal">
     <div class="modal-head">
       <h2 id="sourceModalTitle">Источник APK</h2>
-      <button class="secondary" onclick="closeSourceModal()">Закрыть</button>
+      <button class="secondary" onclick="closeSourceModal()" data-i18n="close">Закрыть</button>
     </div>
     <div class="grid">
-      <label>Название <input id="sourceName" placeholder="custom-packages"></label>
-      <label>URL .apk, repo или GitHub releases <input id="sourceUrl" placeholder="https://github.com/Slava-Shchipunov/awg-openwrt/releases"></label>
-      <label>Arch фильтр <input id="sourceArch" placeholder="aarch64_cortex-a53"></label>
-      <label>Включен <select id="sourceEnabled"><option value="true">Да</option><option value="false">Нет</option></select></label>
+      <label><span data-i18n="name">Название</span> <input id="sourceName" placeholder="custom-packages"></label>
+      <label><span data-i18n="sourceUrl">URL .apk, repo или GitHub releases</span> <input id="sourceUrl" placeholder="https://github.com/Slava-Shchipunov/awg-openwrt/releases"></label>
+      <label><span data-i18n="archFilter">Arch фильтр</span> <input id="sourceArch" placeholder="aarch64_cortex-a53"></label>
+      <label><span data-i18n="enabled">Включен</span> <select id="sourceEnabled"><option value="true" data-i18n="yes">Да</option><option value="false" data-i18n="no">Нет</option></select></label>
     </div>
-    <label>Имена пакетов из этого repo <textarea id="sourcePackages" placeholder="my-package another-package"></textarea></label>
-    <label>Regex имени APK <input id="sourceRegex" placeholder="my-package_.*\\.apk"></label>
+    <label><span data-i18n="sourcePackages">Имена пакетов из этого repo</span> <textarea id="sourcePackages" placeholder="my-package another-package"></textarea></label>
+    <label><span data-i18n="sourceRegex">Regex имени APK</span> <input id="sourceRegex" placeholder="my-package_.*\\.apk"></label>
     <div class="row">
-      <button onclick="saveSourceModal()">Сохранить источник</button>
-      <button class="secondary" onclick="closeSourceModal()">Отмена</button>
+      <button onclick="saveSourceModal()" data-i18n="saveSource">Сохранить источник</button>
+      <button class="secondary" onclick="closeSourceModal()" data-i18n="cancel">Отмена</button>
     </div>
   </div>
 </div>
@@ -1619,7 +1625,7 @@ INDEX_HTML = r"""<!doctype html>
   <div class="modal">
     <div class="modal-head">
       <h2 id="firmwareModalTitle">Последние прошивки</h2>
-      <button class="secondary" onclick="closeFirmwareModal()">Закрыть</button>
+      <button class="secondary" onclick="closeFirmwareModal()" data-i18n="close">Закрыть</button>
     </div>
     <div id="firmwareLinks"></div>
   </div>
@@ -1629,9 +1635,9 @@ INDEX_HTML = r"""<!doctype html>
     <div class="modal-head">
       <h2 id="logTitle">Лог задания</h2>
       <div class="row">
-        <button class="secondary" onclick="refreshSelectedLog()">Обновить</button>
-        <button class="secondary" onclick="copySelectedLog()">Копировать</button>
-        <button class="secondary" onclick="closeLogModal()">Закрыть</button>
+        <button class="secondary" onclick="refreshSelectedLog()" data-i18n="refresh">Обновить</button>
+        <button class="secondary" onclick="copySelectedLog()" data-i18n="copy">Копировать</button>
+        <button class="secondary" onclick="closeLogModal()" data-i18n="close">Закрыть</button>
       </div>
     </div>
     <pre id="mainLog"></pre>
@@ -1649,6 +1655,61 @@ let selectedLogUrl = '';
 let selectedLogLabel = '';
 let jobCache = [];
 let routerStatusCache = {};
+let messages = {};
+let currentLang = localStorage.getItem('owb_language') || ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
+
+function t(key, params = {}) {
+  let text = messages[key] || key;
+  for (const [name, value] of Object.entries(params)) text = text.replaceAll(`{${name}}`, value);
+  return text;
+}
+
+async function loadLocale(lang) {
+  currentLang = lang;
+  languageSelect.value = lang;
+  localStorage.setItem('owb_language', lang);
+  document.documentElement.lang = lang;
+  try {
+    const res = await fetch(`/locales/${encodeURIComponent(lang)}.json`, {cache: 'no-store'});
+    if (!res.ok) throw new Error(res.statusText);
+    messages = await res.json();
+  } catch (e) {
+    messages = {};
+  }
+  applyI18n();
+  renderRouters();
+  renderSources();
+  if (jobCache.length) jobs.innerHTML = jobCache.map(renderJob).join('');
+}
+
+function setLanguage(lang) {
+  loadLocale(lang);
+}
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.getAttribute('data-i18n'));
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.setAttribute('placeholder', t(el.getAttribute('data-i18n-placeholder')));
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.setAttribute('title', t(el.getAttribute('data-i18n-title')));
+  });
+}
+
+function routerStatusLabel(status, fallback) {
+  const map = {
+    no_new_versions: 'routerStatusNoNew',
+    missing_apks: 'routerStatusMissingApks',
+    building: 'routerStatusBuilding',
+    success: 'routerStatusSuccess',
+    queued: 'routerStatusQueued',
+    idle: 'routerStatusIdle',
+    unknown: 'routerStatusUnknown'
+  };
+  return map[status] ? t(map[status]) : (fallback || t('routerStatusUnknown'));
+}
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -1661,27 +1722,27 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 function renderRouters() {
   const list = cfg.routers || [];
   if (!list.length) {
-    routers.innerHTML = '<div class="item"><b>Роутеры еще не добавлены</b><div class="muted">Нажмите «Добавить роутер», найдите модель и сохраните профиль сборки.</div></div>';
+    routers.innerHTML = `<div class="item"><b>${esc(t('noRoutersTitle'))}</b><div class="muted">${esc(t('noRoutersText'))}</div></div>`;
     return;
   }
   routers.innerHTML = `
     <div class="table-wrap">
     <table>
-      <thead><tr><th>Название</th><th>Статус</th><th>Profile</th><th>Target</th><th>Arch</th><th></th></tr></thead>
+      <thead><tr><th>${esc(t('name'))}</th><th>${esc(t('status'))}</th><th>${esc(t('profile'))}</th><th>${esc(t('target'))}</th><th>${esc(t('arch'))}</th><th></th></tr></thead>
       <tbody>
         ${list.map((r, i) => `
           ${(() => { const st = routerStatusCache[r.name] || {}; return `
           <tr>
-            <td><b>${esc(r.name || 'router')}</b><div class="muted">${r.enabled === false ? 'выключен' : 'включен'}</div></td>
-            <td><span class="pill" title="${esc(st.tooltip || '')}">${esc(st.label || 'Неизвестно')}</span></td>
+            <td><b>${esc(r.name || t('router'))}</b><div class="muted">${r.enabled === false ? esc(t('disabledValue')) : esc(t('enabledValue'))}</div></td>
+            <td><span class="pill" title="${esc(st.tooltip || '')}">${esc(routerStatusLabel(st.state, st.label))}</span></td>
             <td>${esc(r.profile || '')}</td>
             <td>${esc(r.target || '')}/${esc(r.subtarget || '')}</td>
             <td>${esc(r.arch || '')}</td>
             <td><div class="actions">
-              <button class="secondary" onclick="openRouterModal(${i})">Редактировать</button>
-              <button class="secondary" onclick="buildRouterByIndex(${i})">Собрать</button>
-              <button class="secondary" onclick="openFirmwareModal(${i})">Прошивки</button>
-              <button class="danger" onclick="deleteRouter(${i})">Удалить</button>
+              <button class="secondary" onclick="openRouterModal(${i})">${esc(t('edit'))}</button>
+              <button class="secondary" onclick="buildRouterByIndex(${i})">${esc(t('build'))}</button>
+              <button class="secondary" onclick="openFirmwareModal(${i})">${esc(t('firmwares'))}</button>
+              <button class="danger" onclick="deleteRouter(${i})">${esc(t('delete'))}</button>
             </div></td>
           </tr>`})()}`).join('')}
       </tbody>
@@ -1692,23 +1753,23 @@ function renderRouters() {
 function renderSources() {
   const list = cfg.package_sources || [];
   if (!list.length) {
-    sources.innerHTML = '<div class="item"><b>Источники APK еще не добавлены</b><div class="muted">Добавьте repo или прямую ссылку на APK, чтобы сервис сам скачивал нужные пакеты под arch роутера.</div></div>';
+    sources.innerHTML = `<div class="item"><b>${esc(t('noSourcesTitle'))}</b><div class="muted">${esc(t('noSourcesText'))}</div></div>`;
     return;
   }
   sources.innerHTML = `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Название</th><th>URL</th><th>Arch</th><th>Пакеты</th><th></th></tr></thead>
+        <thead><tr><th>${esc(t('name'))}</th><th>URL</th><th>${esc(t('arch'))}</th><th>${esc(t('packages'))}</th><th></th></tr></thead>
         <tbody>
           ${list.map((s, i) => `
             <tr>
-              <td><b>${esc(s.name || 'source')}</b><div class="muted">${s.enabled === false ? 'выключен' : 'включен'}</div></td>
+              <td><b>${esc(s.name || 'source')}</b><div class="muted">${s.enabled === false ? esc(t('disabledValue')) : esc(t('enabledValue'))}</div></td>
               <td>${esc(s.url || '')}</td>
-              <td>${esc(s.arch || 'любой')}</td>
-              <td>${esc(s.packages || s.package_names || s.regex || 'по regex/все найденные')}</td>
+              <td>${esc(s.arch || t('anyArch'))}</td>
+              <td>${esc(s.packages || s.package_names || s.regex || t('regexOrAll'))}</td>
               <td><div class="actions">
-                <button class="secondary" onclick="openSourceModal(${i})">Редактировать</button>
-                <button class="danger" onclick="deleteSource(${i})">Удалить</button>
+                <button class="secondary" onclick="openSourceModal(${i})">${esc(t('edit'))}</button>
+                <button class="danger" onclick="deleteSource(${i})">${esc(t('delete'))}</button>
               </div></td>
             </tr>`).join('')}
         </tbody>
@@ -1733,7 +1794,7 @@ function pullForm() {
 
 function scheduleSave() {
   dirty = true;
-  settingsSaveStatus.textContent = 'Есть несохраненные изменения';
+  settingsSaveStatus.textContent = t('unsavedChanges');
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, 800);
 }
@@ -1754,7 +1815,7 @@ function emptyRouter() {
 function openRouterModal(index = null) {
   editingRouterIndex = index;
   const router = index === null ? emptyRouter() : {...(cfg.routers[index] || emptyRouter())};
-  routerModalTitle.textContent = index === null ? 'Добавить роутер' : 'Редактировать роутер';
+  routerModalTitle.textContent = index === null ? t('addRouter') : t('editRouter');
   routerName.value = router.name || '';
   routerTarget.value = router.target || '';
   routerSubtarget.value = router.subtarget || '';
@@ -1800,7 +1861,7 @@ async function saveRouterModal() {
 }
 
 function fillModalFromDevice(device) {
-  const safeName = device.name || device.profile || 'router';
+  const safeName = device.name || device.profile || t('router');
   const baseName = safeName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-|-$/g, '') || device.profile;
   if (!routerName.value || editingRouterIndex === null) routerName.value = uniqueRouterName(baseName);
   routerTarget.value = device.target || '';
@@ -1831,8 +1892,8 @@ function deleteRouter(index) {
 async function openFirmwareModal(index) {
   const router = (cfg.routers || [])[index];
   if (!router) return;
-  firmwareModalTitle.textContent = `Последние прошивки: ${router.name}`;
-  firmwareLinks.innerHTML = '<div class="muted">Загружаю...</div>';
+  firmwareModalTitle.textContent = `${t('firmwareModalTitle')}: ${router.name}`;
+  firmwareLinks.innerHTML = `<div class="muted">${esc(t('loading'))}</div>`;
   firmwareModal.classList.add('open');
   try {
     const report = await api('/api/router-firmware/' + encodeURIComponent(router.name));
@@ -1842,9 +1903,9 @@ async function openFirmwareModal(index) {
         <div><b>${esc(item.release)}</b><div class="muted">${esc(item.built_at || '')}</div></div>
         <div><a href="${esc(item.url)}">${esc(item.name)}</a></div>
         <div class="muted">${esc(item.sha256 || '')}</div>
-      </div>`).join('') : '<div class="item"><b>Прошивок пока нет</b><div class="muted">Успешные сборки появятся здесь автоматически.</div></div>';
+      </div>`).join('') : `<div class="item"><b>${esc(t('noFirmwareTitle'))}</b><div class="muted">${esc(t('noFirmwareText'))}</div></div>`;
   } catch (e) {
-    firmwareLinks.innerHTML = '<div class="item"><b>Не удалось загрузить список</b><div class="muted">' + esc(e.message) + '</div></div>';
+    firmwareLinks.innerHTML = `<div class="item"><b>${esc(t('firmwareLoadError'))}</b><div class="muted">${esc(e.message)}</div></div>`;
   }
 }
 
@@ -1854,7 +1915,7 @@ function closeFirmwareModal() {
 
 function renderDeviceResults(report) {
   if (report.error) {
-    modalDeviceResults.innerHTML = '<div class="item"><b>Не удалось загрузить список устройств</b><div class="muted">' + esc(report.error) + '</div></div>';
+    modalDeviceResults.innerHTML = `<div class="item"><b>${esc(t('deviceLoadError'))}</b><div class="muted">${esc(report.error)}</div></div>`;
     return;
   }
   const devices = report.devices || [];
@@ -1863,8 +1924,8 @@ function renderDeviceResults(report) {
     <div class="item">
       <div><b>${esc(d.name)}</b> <span class="pill">${esc(d.profile)}</span></div>
       <div class="muted">${esc(d.target)}/${esc(d.subtarget)} · ${esc(d.arch || 'arch unknown')} · OpenWrt ${esc(report.release)}</div>
-      <button class="secondary" onclick="addDeviceRouterByIndex(${i})">Заполнить поля</button>
-    </div>`).join('') : '<div class="muted">Ничего не найдено.</div>';
+      <button class="secondary" onclick="addDeviceRouterByIndex(${i})">${esc(t('fieldsLoaded'))}</button>
+    </div>`).join('') : `<div class="muted">${esc(t('nothingFound'))}</div>`;
 }
 
 function searchDevices() {
@@ -1875,7 +1936,7 @@ function searchDevices() {
     return;
   }
   searchTimer = setTimeout(async () => {
-    modalDeviceResults.innerHTML = '<div class="muted">Ищу...</div>';
+    modalDeviceResults.innerHTML = `<div class="muted">${esc(t('searching'))}</div>`;
     try {
       const report = await api('/api/devices?q=' + encodeURIComponent(q));
       renderDeviceResults(report);
@@ -1892,7 +1953,7 @@ function emptySource() {
 function openSourceModal(index = null) {
   editingSourceIndex = index;
   const source = index === null ? emptySource() : {...(cfg.package_sources[index] || emptySource())};
-  sourceModalTitle.textContent = index === null ? 'Добавить источник APK' : 'Редактировать источник APK';
+  sourceModalTitle.textContent = index === null ? t('addSource') : t('editSource');
   sourceName.value = source.name || '';
   sourceUrl.value = source.url || '';
   sourceArch.value = source.arch || '';
@@ -1940,14 +2001,14 @@ function deleteSource(index) {
 async function save() {
   clearTimeout(saveTimer);
   pullForm();
-  settingsSaveStatus.textContent = 'Сохраняю...';
+  settingsSaveStatus.textContent = t('saving');
   try {
     await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
     dirty = false;
-    settingsSaveStatus.textContent = 'Сохранено';
+    settingsSaveStatus.textContent = t('saved');
     await load();
   } catch (e) {
-    settingsSaveStatus.textContent = 'Ошибка сохранения: ' + e.message;
+    settingsSaveStatus.textContent = t('saveError') + e.message;
     throw e;
   }
 }
@@ -1957,24 +2018,32 @@ async function buildNow(router) {
   await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
   const result = await api('/api/build', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({router, force:true})});
   await load();
-  if (result.log) viewLog(result.log, 'Запуск сборки');
+  if (result.log) viewLog(result.log, t('buildStarted'));
+}
+
+async function buildAllAvailable() {
+  pullForm();
+  await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
+  const result = await api('/api/build', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({force:false})});
+  await load();
+  if (result.log) viewLog(result.log, t('buildStarted'));
 }
 
 async function scanRepos() {
   pullForm();
-  scan.innerHTML = 'Проверяю...';
+  scan.innerHTML = esc(t('checking'));
   await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
   const report = await api('/api/scan-packages', {method:'POST'});
   scan.innerHTML = report.routers.map(r => `
     <div class="item">
       <b>${esc(r.router)} ${esc(r.release)}</b>
-      <span class="pill">${r.ready ? 'APK найдены' : 'Ожидание APK'}</span>
+      <span class="pill">${r.ready ? esc(t('apkFound')) : esc(t('waitingApk'))}</span>
       <span class="muted">${esc(r.arch)}</span>
-      ${(r.missing || []).length ? `<div class="muted">Не хватает: ${(r.missing || []).map(m => esc(m.source) + ': ' + (m.missing || []).map(esc).join(', ')).join('; ')}</div>` : ''}
+      ${(r.missing || []).length ? `<div class="muted">${esc(t('missing'))}: ${(r.missing || []).map(m => esc(m.source) + ': ' + (m.missing || []).map(esc).join(', ')).join('; ')}</div>` : ''}
       ${r.sources.map(s => `
         <div>
           <b>${esc(s.name)}</b>
-          ${s.packages.length ? s.packages.map(p => `<div><a href="${esc(p.url)}">${esc(p.file)}</a></div>`).join('') : '<div class="muted">Подходящих APK не найдено</div>'}
+          ${s.packages.length ? s.packages.map(p => `<div><a href="${esc(p.url)}">${esc(p.file)}</a></div>`).join('') : `<div class="muted">${esc(t('noMatchingApk'))}</div>`}
         </div>`).join('')}
     </div>`).join('');
 }
@@ -2012,49 +2081,49 @@ async function copySelectedLog() {
   if (!text) return;
   await navigator.clipboard.writeText(text);
   const old = logTitle.textContent;
-  logTitle.textContent = 'Лог скопирован в буфер обмена';
+  logTitle.textContent = t('logCopied');
   setTimeout(() => logTitle.textContent = old, 1200);
 }
 
 async function checkVersion() {
-  versionStatus.textContent = 'Проверяю...';
+  versionStatus.textContent = t('checking');
   const info = await api('/api/version');
   repoLink.href = info.repo_url;
   const current = info.current_short || 'unknown';
   const latest = info.latest_short || 'unknown';
   if (!info.current_short) {
-    versionStatus.textContent = `Версия не записана; latest: ${latest}. Обновите из консоли один раз.`;
+    versionStatus.textContent = t('versionNoCommit', {latest});
   } else if (info.update_available) {
     versionStatus.textContent = info.latest_cached
-      ? `Доступно обновление: ${current} → ${latest} (latest из кеша; GitHub сейчас не ответил)`
-      : `Доступно обновление: ${current} → ${latest}`;
+      ? t('updateAvailableCached', {current, latest})
+      : t('updateAvailable', {current, latest});
   } else if (info.error) {
     versionStatus.textContent = info.latest_cached
-      ? `Актуальная версия: ${current} (latest из кеша; GitHub сейчас не ответил)`
-      : `Версия: ${current}; GitHub сейчас не ответил`;
+      ? t('versionCached', {current})
+      : t('versionGithubError', {current});
   } else {
-    versionStatus.textContent = `Актуальная версия: ${current}`;
+    versionStatus.textContent = t('currentVersion', {current});
   }
 }
 
 async function runUpdate() {
-  versionStatus.textContent = 'Запускаю обновление...';
+  versionStatus.textContent = t('startingUpdate');
   try {
     const result = await api('/api/update', {method:'POST'});
-    versionStatus.textContent = 'Обновление запущено. Сервис перезапустится, обновите страницу через 10-20 секунд.';
-    if (result.log) viewLog(result.log, 'Обновление приложения');
+    versionStatus.textContent = t('updateStarted');
+    if (result.log) viewLog(result.log, t('updateLogTitle'));
   } catch (e) {
     if (String(e.message || '').includes('Failed to fetch')) {
-      versionStatus.textContent = 'Соединение прервано: сервис, вероятно, уже перезапускается. Обновите страницу через 10-20 секунд.';
+      versionStatus.textContent = t('updateConnectionLost');
     } else {
-      versionStatus.textContent = 'Обновление не запустилось: ' + e.message;
+      versionStatus.textContent = t('updateFailed') + e.message;
     }
-    viewLog('/logs/self-update.log', 'Обновление приложения');
+    viewLog('/logs/self-update.log', t('updateLogTitle'));
   }
 }
 
 async function cleanupJobs() {
-  if (!confirm('Очистить старые задания, логи, скачанные APK и ImageBuilder? Готовые прошивки останутся на месте.')) return;
+  if (!confirm(t('cleanupConfirm'))) return;
   await api('/api/cleanup', {method:'POST'});
   selectedLogUrl = '';
   selectedLogLabel = '';
@@ -2065,11 +2134,11 @@ async function cleanupJobs() {
 
 function renderJob(job, index) {
   const progress = Math.max(0, Math.min(100, Number(job.progress ?? 0)));
-  const output = job.output ? `<a href="${esc(job.output)}">firmware</a>` : '';
+  const output = job.output ? `<a href="${esc(job.output)}">${esc(t('firmwareLink'))}</a>` : '';
   const error = job.error ? `<div class="muted">${esc(job.error)}</div>` : '';
   const canCancel = ['queued','running','downloading','checking','building','publishing','waiting_apks'].includes(job.status);
-  const cancel = canCancel ? `<button class="danger" onclick="cancelJob(${index})">Остановить</button>` : '';
-  const finalLine = job.status === 'success' && job.output ? `Готово: ${job.output}` : (job.last_line || 'Лог пока пустой');
+  const cancel = canCancel ? `<button class="danger" onclick="cancelJob(${index})">${esc(t('stop'))}</button>` : '';
+  const finalLine = job.status === 'success' && job.output ? `${t('ready')}: ${job.output}` : (job.last_line || t('emptyLog'));
   return `<div class="item">
     <div class="job-head">
       <div><b>${esc(job.router)} ${esc(job.release)}</b><div class="muted">${esc(job.updated_at || '')}</div></div>
@@ -2078,14 +2147,14 @@ function renderJob(job, index) {
     <div class="progress"><span style="width:${progress}%"></span></div>
     <div class="last-line">${esc(finalLine)}</div>
     ${error}
-    <div class="row">${output}<button class="secondary" onclick="viewJobLog(${index})">Лог</button>${cancel}</div>
+    <div class="row">${output}<button class="secondary" onclick="viewJobLog(${index})">${esc(t('log'))}</button>${cancel}</div>
   </div>`;
 }
 
 async function cancelJob(index) {
   const job = jobCache[index];
   if (!job || !job.id) return;
-  if (!confirm(`Остановить задание ${job.router || job.id}?`)) return;
+  if (!confirm(t('stopConfirm', {job: job.router || job.id}))) return;
   await api('/api/cancel', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({id: job.id})});
   await load();
 }
@@ -2093,18 +2162,20 @@ async function cancelJob(index) {
 async function load() {
   if (!dirty) cfg = await api('/api/config');
   const st = await api('/api/status');
-  latest.textContent = 'Latest: ' + (st.latest_release || 'unknown');
+  latest.textContent = t('latest') + ': ' + (st.latest_release || 'unknown');
   const jobList = st.jobs || [];
   jobCache = jobList;
   routerStatusCache = st.routers_status || {};
-  jobs.innerHTML = jobList.length ? jobList.map(renderJob).join('') : '<div class="item"><b>Заданий пока нет</b><div class="muted">Cron проверит новые версии автоматически, ручная сборка тоже появится здесь.</div></div>';
+  jobs.innerHTML = jobList.length ? jobList.map(renderJob).join('') : `<div class="item"><b>${esc(t('noJobsTitle'))}</b><div class="muted">${esc(t('noJobsText'))}</div></div>`;
   if (selectedLogUrl && logModal.classList.contains('open')) {
     refreshSelectedLog();
   }
   if (!dirty) bindConfig();
 }
-load();
-checkVersion();
+loadLocale(currentLang).then(() => {
+  load();
+  checkVersion();
+});
 setInterval(load, 3000);
 </script>
 </body>
@@ -2150,6 +2221,13 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/":
             self.send(200, INDEX_HTML, "text/html; charset=utf-8")
+        elif path.startswith("/locales/"):
+            name = Path(urllib.parse.unquote(path[len("/locales/"):])).name
+            file_path = LOCALE_DIR / name
+            if file_path.suffix == ".json" and file_path.exists():
+                self.send(200, file_path.read_text(encoding="utf-8"), "application/json; charset=utf-8")
+            else:
+                self.send(404, {"error": "not found"})
         elif path == "/api/config":
             self.send(200, config())
         elif path == "/api/status":
@@ -2283,7 +2361,7 @@ def main():
     cfg = config()
     scheduler.start()
     server = ThreadingHTTPServer((cfg.get("listen_host", "0.0.0.0"), int(cfg.get("listen_port", 8088))), Handler)
-    print(f"OpenWrt Builder listening on http://{cfg.get('listen_host')}:{cfg.get('listen_port')}", flush=True)
+    print(f"OpenWrt Custom Local Builder listening on http://{cfg.get('listen_host')}:{cfg.get('listen_port')}", flush=True)
     server.serve_forever()
 
 

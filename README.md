@@ -1,34 +1,47 @@
-# Local OpenWrt 25.x Firmware Builder
+# OpenWrt Custom Local Builder
 
-Локальная веб-морда для LXC/VM в Proxmox. Сервис мониторит новые релизы OpenWrt ветки `25.*`, скачивает нужный `openwrt-imagebuilder`, мониторит выбранные APK-репозитории, находит пакеты под архитектуру конкретного роутера, собирает sysupgrade-образы и раздает готовые файлы по HTTP.
+OpenWrt Custom Local Builder is a local web application for a Proxmox LXC/VM. It watches the OpenWrt 25.x release branch, downloads the correct ImageBuilder for your selected routers, waits for required external APK packages to appear, builds custom sysupgrade images, keeps the latest firmware files available over HTTP, and can be used as a local sysupgrade server.
 
-На 19 мая 2026 официальный Sysupgrade Server OpenWrt показывает актуальный релиз ветки 25 как `25.12.4`; сервис не зашивает номер релиза в код, а каждый цикл читает `https://downloads.openwrt.org/releases/` и выбирает максимальный релиз с префиксом `25.`.
+OpenWrt Custom Local Builder - локальное веб-приложение для LXC/VM в Proxmox. Оно следит за релизами OpenWrt 25.x, скачивает нужный ImageBuilder под выбранные роутеры, ждет появления внешних APK, собирает кастомные sysupgrade-прошивки, хранит последние готовые файлы и раздает их по HTTP для обновления роутеров.
 
-## 1. Подготовка LXC
+[Русский](#русский) | [English](#english)
 
-Рекомендованный контейнер: Debian 12/13 или Ubuntu 24.04, 2-4 vCPU, 4+ ГБ RAM, 20+ ГБ диска. Для нескольких target/subtarget лучше 40+ ГБ.
+## Русский
 
-В Proxmox LXC включите сеть с доступом в интернет и к локальной сети роутеров. Privileged-контейнер не обязателен, но сборка ImageBuilder должна иметь возможность запускать `make`, `tar`, `zstd` и писать в `/var/lib/openwrt-builder`.
+### Что делает приложение
 
-## 2. Установка и обновление
+- Мониторит актуальный релиз OpenWrt по префиксу ветки, например `25.`.
+- Ищет роутеры как OpenWrt Firmware Selector и заполняет `target`, `subtarget`, `profile`, `arch` и штатный список пакетов.
+- Для каждого роутера хранит индивидуальный список пакетов ImageBuilder.
+- Мониторит внешние APK-источники: прямые `.apk`, HTML-индексы, repo-каталоги и GitHub Releases.
+- Подбирает APK под нужные `release`, `arch`, `target/subtarget` и имя пакета.
+- Если для нового релиза не хватает обязательных APK, сборка не запускается и переходит в ожидание APK.
+- Когда все APK найдены, автоматически собирает прошивку.
+- Держит последние 3 успешные прошивки на каждый роутер; старые, неудачные и отмененные задания чистятся.
+- Показывает статус каждого роутера, progress bar задания, последнюю строку лога и live-лог в модальном окне.
+- Поддерживает русский и английский интерфейс. Язык хранится на уровне браузера пользователя.
 
-В LXC выполните одной командой:
+### Требования
+
+Рекомендуемый контейнер: Debian 12/13 или Ubuntu 24.04, 2-4 vCPU, 4+ ГБ RAM, 20+ ГБ диска. Для нескольких target/subtarget лучше 40+ ГБ.
+
+Контейнеру нужен доступ в интернет и в локальную сеть роутеров. Privileged LXC не обязателен, но ImageBuilder должен запускать `make`, `tar`, `zstd` и писать в `/var/lib/openwrt-builder`.
+
+### Установка и обновление
+
+В LXC выполните:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo bash
 ```
 
-Если нужен нестандартный порт:
+Нестандартный порт:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo PORT=8090 bash
 ```
 
-Также можно скопировать каталог в контейнер и запустить локально:
-
-```bash
-sudo bash install.sh
-```
+Повторный запуск той же команды обновляет приложение до актуальной версии из `main`: установщик скачивает свежие файлы, останавливает сервис, сохраняет `/var/lib/openwrt-builder/config.json` и данные, делает backup старого `/opt/openwrt-builder`, устанавливает новую версию и запускает сервис.
 
 После установки:
 
@@ -37,98 +50,69 @@ systemctl status openwrt-builder
 journalctl -u openwrt-builder -f
 ```
 
-Повторный запуск той же команды обновляет приложение до свежей версии из `main`: установщик скачает актуальные файлы, остановит `openwrt-builder`, сохранит текущий `/var/lib/openwrt-builder/config.json` и данные, сделает backup старого `/opt/openwrt-builder` в `/var/lib/openwrt-builder/backups/`, обновит приложение и снова запустит сервис.
-
-Кнопка обновления в веб-интерфейсе использует root-helper через `sudo` и `systemd-run`. Поэтому systemd-unit сервиса устанавливается с `NoNewPrivileges=false`; иначе LXC/Debian блокирует `sudo` сообщением про флаг `без новых привилегий`.
-
-Откройте веб-интерфейс:
+Откройте:
 
 ```text
 http://IP_КОНТЕЙНЕРА:8088
 ```
 
-В веб-интерфейсе можно:
+Кнопка обновления в веб-интерфейсе использует root-helper через `sudo` и `systemd-run`. Unit устанавливается с `NoNewPrivileges=false`, иначе LXC/Debian может блокировать `sudo`.
 
-- менять базовые настройки сервера и ветку `25.`
-- искать роутеры как в Firmware Selector и автозаполнять `target`, `subtarget`, `profile`, `arch`
-- добавлять/удалять роутеры вручную
-- видеть по каждому роутеру текущий статус: `Нет новых версий`, `Нет APK`, `Собирается`, `Успешно собрано`
-- открывать по кнопке `Прошивки` последние 3 успешные сборки роутера
-- задавать индивидуальный список пакетов ImageBuilder для каждого роутера
-- управлять APK-репозиториями отдельным списком: `Добавить`, `Редактировать`, `Удалить`
-- проверить репозитории кнопкой `Проверить репозитории`
-- проверить актуальность приложения по GitHub в нижней панели
-- запустить обновление приложения кнопкой `Обновить`
-- запустить сборку всех роутеров или одного конкретного
-- аварийно остановить queued/running/building-задание кнопкой `Остановить`
-- смотреть статусы заданий, progress bar, последнюю строку лога и live-лог в модальном окне
-- автоматически обновлять открытый лог и копировать его в буфер обмена
-- очищать старые задания, логи, скачанные APK и ImageBuilder-каталоги кнопкой `Очистить старые задания`
+### Язык интерфейса
 
-Сервис автоматически держит последние 3 успешные прошивки на каждый роутер. Более старые successful-релизы удаляются из `/var/lib/openwrt-builder/firmware/<router>/`, а failed/cancelled jobs удаляются из списка заданий и логов после завершения.
+В шапке есть переключатель `RU / EN`. Выбранный язык сохраняется в `localStorage` браузера, поэтому у разных пользователей может быть разный язык.
 
-Изменения в веб-интерфейсе сохраняются автоматически. Кнопка `Сохранить` оставлена для явного сохранения перед ручным запуском сборки.
+Файлы локализации лежат отдельно от скрипта:
 
-## 3. Как добавить роутер
+```text
+locales/ru.json
+locales/en.json
+```
 
-Обычно ничего вручную искать не нужно:
+Новые языки не добавляются заранее. Их имеет смысл добавлять только после предложений пользователей.
+
+### Как добавить роутер
 
 1. Откройте веб-интерфейс.
 2. В блоке `Роутеры` нажмите `Добавить роутер`.
-3. В модальном окне начните вводить модель, например `GL-MT6000`, `Archer C7` или `OpenWrt One`.
-4. Нажмите `Заполнить поля` у найденного устройства.
-5. Сервис сам заполнит `target`, `subtarget`, `profile`, `arch` и полный список пакетов прошивки.
-6. При необходимости поправьте список пакетов и нажмите `Сохранить роутер`.
+3. Введите модель, например `Cudy WR3000`, `GL-MT6000` или `Archer C7`.
+4. Нажмите `Заполнить поля` у найденной модели.
+5. Проверьте список пакетов и нажмите `Сохранить роутер`.
 
-Ручной режим нужен только если устройство не находится через поиск или вы хотите указать профиль явно. Тогда для каждого устройства нужны четыре значения из OpenWrt downloads:
+Приложение заполнит `target`, `subtarget`, `profile`, `arch` и базовые пакеты из OpenWrt `profiles.json`.
 
-- `target`: например `mediatek`
-- `subtarget`: например `filogic`
-- `profile`: например `glinet_gl-mt6000`
-- `arch`: архитектура APK, например `aarch64_cortex-a53`
-
-Как найти профиль вручную:
-
-```bash
-cd /var/lib/openwrt-builder/builders/25.12.x/mediatek-filogic
-make info | less
-```
-
-Или посмотрите файл `profiles.json` в каталоге target/subtarget на downloads OpenWrt:
+Ручной режим нужен, если устройство не находится поиском. Тогда укажите:
 
 ```text
-https://downloads.openwrt.org/releases/25.12.x/targets/mediatek/filogic/profiles.json
+target: mediatek
+subtarget: filogic
+profile: cudy_wr3000-v1
+arch: aarch64_cortex-a53
 ```
 
-В поле `Пакеты ImageBuilder` пишите имена пакетов через пробел или с новой строки:
+Список пакетов можно писать через пробел или с новой строки:
 
 ```text
-luci luci-ssl luci-app-attendedsysupgrade owut htop irqbalance
+luci luci-app-attendedsysupgrade luci-mod-dashboard https-dns-proxy
 ```
 
-## 4. Пользовательские APK
+### Внешние APK / репозитории
 
 Источник может быть:
 
-- прямая ссылка на `.apk`
-- ссылка на HTML-индекс, где лежат `.apk`
-- корень репозитория с подпапками версии и архитектуры
-- страница GitHub Releases, например `https://github.com/Slava-Shchipunov/awg-openwrt/releases`
+- прямая ссылка на `.apk`;
+- HTML-индекс с `.apk`;
+- корень repo с подпапками версии и архитектуры;
+- GitHub Releases, например `https://github.com/Slava-Shchipunov/awg-openwrt/releases`.
 
-В URL можно использовать шаблоны:
+В URL поддерживаются шаблоны:
 
 ```text
-{release}  -> актуальный релиз OpenWrt, например 25.12.4
+{release}  -> текущий релиз OpenWrt, например 25.12.4
 {arch}     -> архитектура роутера, например aarch64_cortex-a53
 ```
 
-Пример:
-
-```text
-https://repo.example.local/openwrt/{release}/{arch}/
-```
-
-Если шаблонов нет, сервис сам пробует варианты:
+Если шаблонов нет, сервис сам пробует:
 
 ```text
 <url>/
@@ -137,27 +121,23 @@ https://repo.example.local/openwrt/{release}/{arch}/
 <url>/<release>/<arch>/
 ```
 
-В поле `Имена пакетов из этого repo` перечислите нужные пакеты:
+В поле `Имена пакетов из этого repo` укажите обязательные пакеты:
 
 ```text
-my-package another-package luci-app-custom
+amneziawg-tools kmod-amneziawg luci-i18n-amneziawg-ru luci-proto-amneziawg
 ```
 
-Сервис для каждого выбранного роутера берет его `arch`, обходит выбранные репозитории, ищет `.apk` с подходящей архитектурой (`_<arch>.apk`) или универсальные (`_all.apk`), выбирает самый свежий файл по имени версии и скачивает его. Если поле имен пустое, он скачает все подходящие APK из найденного индекса; обычно лучше имена указать явно.
-
-Автоматическая сборка строгая: если для новой версии OpenWrt найден не весь обязательный набор внешних APK из поля `Имена пакетов из этого repo`, прошивка не собирается. В заданиях появится статус `waiting_apks`, а планировщик будет проверять репозитории по таймеру. Как только все APK под текущие `release`, `arch`, `target` и `subtarget` появятся, сборка запустится автоматически без ручного действия.
-
-Для GitHub Releases сервис использует GitHub API, выбирает release под текущую версию OpenWrt и дополнительно фильтрует assets по платформе роутера. Например для `Slava-Shchipunov/awg-openwrt` добавьте источник:
+Для `Slava-Shchipunov/awg-openwrt` пример источника:
 
 ```text
 Название: amneziawg
 URL: https://github.com/Slava-Shchipunov/awg-openwrt/releases
-Arch фильтр: можно оставить пустым или указать arch конкретного роутера
+Arch фильтр: можно оставить пустым
 Имена пакетов:
 amneziawg-tools kmod-amneziawg luci-i18n-amneziawg-ru luci-proto-amneziawg
 ```
 
-Для роутера `mediatek/filogic` и `aarch64_cortex-a53` он будет искать файлы вида:
+Для `mediatek/filogic` и `aarch64_cortex-a53` приложение будет искать файлы вида:
 
 ```text
 amneziawg-tools_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
@@ -166,19 +146,17 @@ luci-i18n-amneziawg-ru_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
 luci-proto-amneziawg_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
 ```
 
-Для HTML-индекса дополнительно можно задать `regex`, например:
+Если обязательный APK для нового релиза еще не опубликован, статус роутера будет `Нет необходимых APK`, а задание получит статус `waiting_apks`. Планировщик продолжит проверять репозитории по таймеру и запустит сборку автоматически, когда все пакеты появятся.
 
-```text
-my-package_.*\.apk$
-```
+`allow_untrusted_apk=true` добавляет для ImageBuilder режим установки неподписанных APK. Это удобно для своих пакетов, но небезопасно для неизвестных источников: такие пакеты попадут в прошивку с root-доступом.
 
-Сервис копирует найденные APK в ImageBuilder и добавляет путь к ним в `PACKAGES`. Дополнительно при `allow_untrusted_apk=true` он пытается распаковать содержимое APK в `FILES` overlay, чтобы самосборные пакеты без подписи попали в образ даже при строгой проверке подписей.
+### Сборка
 
-Важно: untrusted APK - это риск. Используйте только пакеты, которым доверяете, потому что они попадут в прошивку с root-доступом.
+Кнопка `Собрать все доступные прошивки` запускает сборку всех включенных роутеров, для которых есть новый релиз и полный набор обязательных APK. Она не должна принудительно пересобирать уже готовую актуальную прошивку.
 
-## 5. Сборка вручную
+В таблице роутеров есть отдельная кнопка `Собрать` для конкретного роутера. Она запускает ручную сборку выбранного роутера.
 
-В веб-интерфейсе нажмите `Собрать сейчас`. Логи доступны в разделе заданий и в файловой системе:
+Логи доступны в UI и на диске:
 
 ```bash
 ls -lah /var/lib/openwrt-builder/logs
@@ -186,26 +164,26 @@ ls -lah /var/lib/openwrt-builder/logs
 
 Готовые прошивки:
 
-```bash
+```text
 /var/lib/openwrt-builder/firmware/<router>/<release>/
 /var/lib/openwrt-builder/firmware/<router>/latest/
 ```
 
-HTTP-ссылки:
+HTTP:
 
 ```text
-http://IP_КОНТЕЙНЕРА:8088/firmware/<router>/latest/<имя-sysupgrade-файла>
+http://IP_КОНТЕЙНЕРА:8088/firmware/<router>/latest/<sysupgrade-file>
 ```
 
-## 6. Address of the sysupgrade server
+### Address of the sysupgrade server
 
-В OpenWrt установите `luci-app-attendedsysupgrade` и/или `owut` в базовый образ. В поле `Address of the sysupgrade server` можно указать:
+В OpenWrt установите `luci-app-attendedsysupgrade` и укажите корень сервера:
 
 ```text
 http://IP_КОНТЕЙНЕРА:8088
 ```
 
-Не добавляйте `/api/asu` к адресу, если клиент сам ожидает обычный ASU-сервер. Совместимые endpoints доступны от корня:
+Не добавляйте `/api/asu`, если клиент ожидает обычный ASU-сервер. Совместимые endpoints доступны от корня:
 
 ```text
 http://IP_КОНТЕЙНЕРА:8088/json/v1/overview.json
@@ -213,43 +191,26 @@ http://IP_КОНТЕЙНЕРА:8088/json/v1/latest.json
 http://IP_КОНТЕЙНЕРА:8088/api/v1/build
 ```
 
-Для уже сохраненной настройки с `/api/asu` сервис также отдает совместимые пути вида `/api/asu/json/v1/overview.json`, но основной рекомендуемый адрес - корень сервера.
+Для старых сохраненных настроек сервис также отвечает на `/api/asu/...`.
 
-Сервис отвечает на ASU overview/latest/branches/revision endpoints и принимает простые build-запросы на `POST /api/v1/build`. Это легкий локальный prebuilder, а не полная копия upstream ASU с Redis/cache/signing API. Если ваш клиент ASU требует строго совместимое поведение upstream-сервера, используйте прямой URL готового sysupgrade-файла:
+Это локальный prebuilder, а не полная копия upstream ASU. Самый надежный сценарий: приложение заранее собирает прошивку, роутер получает ссылку на готовый sysupgrade-файл и обновляется обычным `sysupgrade`.
 
-Для LuCI `luci-app-attendedsysupgrade` сервер также отдает CORS headers, `OPTIONS` preflight, `GET /api/v1/build/<request_hash>` и `/store/<router>/<release>/<file>`, потому что LuCI запускает эти запросы из браузера роутера на другой origin.
-
-```text
-http://IP_КОНТЕЙНЕРА:8088/firmware/<router>/latest/<имя-sysupgrade-файла>
-```
-
-Практически самый надежный локальный сценарий: сервис собирает файл, роутер скачивает его через `wget`/LuCI/owut, затем выполняется обычный sysupgrade.
-
-## 7. Пример обновления с роутера
+### Обновление с роутера вручную
 
 ```sh
 cd /tmp
-wget -O fw.bin http://IP_КОНТЕЙНЕРА:8088/firmware/gl-mt6000/latest/openwrt-25.12.x-mediatek-filogic-glinet_gl-mt6000-squashfs-sysupgrade.bin
+wget -O fw.bin http://IP_КОНТЕЙНЕРА:8088/firmware/cudy-wr3000-v1/latest/openwrt-25.12.x-mediatek-filogic-cudy_wr3000-v1-squashfs-sysupgrade.bin
 sha256sum fw.bin
-sysupgrade -n fw.bin
-```
-
-Для сохранения конфигурации уберите `-n`:
-
-```sh
 sysupgrade fw.bin
 ```
 
-## 8. Обновление сервиса
+Для чистой установки без сохранения настроек:
 
-После правки файлов:
-
-```bash
-sudo cp app.py /opt/openwrt-builder/app.py
-sudo systemctl restart openwrt-builder
+```sh
+sysupgrade -n fw.bin
 ```
 
-## 9. Полезные команды
+### Полезные команды
 
 ```bash
 journalctl -u openwrt-builder -f
@@ -258,6 +219,215 @@ du -sh /var/lib/openwrt-builder
 find /var/lib/openwrt-builder/firmware -type f
 ```
 
-## 10. Ограничения
+## English
 
-OpenWrt 25.x использует APK. Для самосборных пакетов без подписи штатная установка требует `--allow-untrusted`; ImageBuilder и внешние APK пока ведут себя менее предсказуемо, чем официальный репозиторий. Поэтому сервис делает две вещи: передает APK в `PACKAGES` и распаковывает его payload в overlay. Если пакет имеет сложные зависимости или post-install scripts, лучше поднять полноценный подписанный APK-репозиторий и добавить его в ImageBuilder.
+### What it does
+
+- Watches the current OpenWrt release by branch prefix, for example `25.`.
+- Searches routers like OpenWrt Firmware Selector and fills `target`, `subtarget`, `profile`, `arch`, and default packages.
+- Stores a separate ImageBuilder package list for every router.
+- Monitors external APK sources: direct `.apk` links, HTML indexes, repo directories, and GitHub Releases.
+- Matches APK files by `release`, `arch`, `target/subtarget`, and package name.
+- If a new OpenWrt release is available but required APK files are missing, the build is not started and waits for APKs.
+- Builds automatically once all required APK files are available.
+- Keeps the latest 3 successful firmware builds per router; older, failed, and cancelled jobs are cleaned up.
+- Shows per-router status, job progress, the last log line, and a live log modal.
+- Supports Russian and English UI. The selected language is stored per browser user.
+
+### Requirements
+
+Recommended container: Debian 12/13 or Ubuntu 24.04, 2-4 vCPU, 4+ GB RAM, 20+ GB disk. Use 40+ GB if you build several target/subtarget combinations.
+
+The container needs internet access and access to your router LAN. A privileged LXC is not required, but ImageBuilder must be able to run `make`, `tar`, `zstd`, and write to `/var/lib/openwrt-builder`.
+
+### Install and update
+
+Run in the LXC:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo bash
+```
+
+Custom port:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo PORT=8090 bash
+```
+
+Running the same command again updates the application from `main`: the installer downloads fresh files, stops the service, keeps `/var/lib/openwrt-builder/config.json` and data, backs up the old `/opt/openwrt-builder`, installs the new version, and starts the service again.
+
+After installation:
+
+```bash
+systemctl status openwrt-builder
+journalctl -u openwrt-builder -f
+```
+
+Open:
+
+```text
+http://CONTAINER_IP:8088
+```
+
+The web UI update button uses a root helper via `sudo` and `systemd-run`. The service unit is installed with `NoNewPrivileges=false`; otherwise some LXC/Debian setups block `sudo`.
+
+### UI language
+
+The header has an `RU / EN` selector. The selected language is saved in browser `localStorage`, so different users can use different languages.
+
+Locale files are separate from the Python script:
+
+```text
+locales/ru.json
+locales/en.json
+```
+
+Additional languages are intentionally not bundled until users propose them.
+
+### Add a router
+
+1. Open the web UI.
+2. In `Routers`, click `Add router`.
+3. Search for a model, for example `Cudy WR3000`, `GL-MT6000`, or `Archer C7`.
+4. Click `Fill fields` on the selected model.
+5. Review the package list and click `Save router`.
+
+The application fills `target`, `subtarget`, `profile`, `arch`, and default packages from OpenWrt `profiles.json`.
+
+Manual mode is only needed when search does not find the device. Example:
+
+```text
+target: mediatek
+subtarget: filogic
+profile: cudy_wr3000-v1
+arch: aarch64_cortex-a53
+```
+
+Package lists can be space-separated or line-separated:
+
+```text
+luci luci-app-attendedsysupgrade luci-mod-dashboard https-dns-proxy
+```
+
+### External APK / repositories
+
+A source can be:
+
+- a direct `.apk` URL;
+- an HTML index with `.apk` links;
+- a repo root with release and arch subdirectories;
+- GitHub Releases, for example `https://github.com/Slava-Shchipunov/awg-openwrt/releases`.
+
+URL templates:
+
+```text
+{release}  -> current OpenWrt release, for example 25.12.4
+{arch}     -> router architecture, for example aarch64_cortex-a53
+```
+
+If no templates are used, the service tries:
+
+```text
+<url>/
+<url>/<arch>/
+<url>/<release>/
+<url>/<release>/<arch>/
+```
+
+List required package names in `Package names from this repo`:
+
+```text
+amneziawg-tools kmod-amneziawg luci-i18n-amneziawg-ru luci-proto-amneziawg
+```
+
+Example for `Slava-Shchipunov/awg-openwrt`:
+
+```text
+Name: amneziawg
+URL: https://github.com/Slava-Shchipunov/awg-openwrt/releases
+Arch filter: leave empty unless you want to restrict it
+Package names:
+amneziawg-tools kmod-amneziawg luci-i18n-amneziawg-ru luci-proto-amneziawg
+```
+
+For `mediatek/filogic` and `aarch64_cortex-a53`, it will look for files like:
+
+```text
+amneziawg-tools_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+kmod-amneziawg_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+luci-i18n-amneziawg-ru_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+luci-proto-amneziawg_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+```
+
+If a required APK for the new release is not published yet, the router status becomes `Required APK missing`, and the job status becomes `waiting_apks`. The scheduler keeps checking sources and starts the build automatically once every required file is available.
+
+`allow_untrusted_apk=true` enables untrusted APK installation in ImageBuilder. This is useful for your own packages, but unsafe for unknown sources: those packages become part of the firmware with root privileges.
+
+### Build
+
+`Build all available firmware` starts builds for all enabled routers that have a new release and a complete required APK set. It should not force-rebuild firmware that is already current.
+
+The router table also has a per-router `Build` button for manual builds.
+
+Logs are available in the UI and on disk:
+
+```bash
+ls -lah /var/lib/openwrt-builder/logs
+```
+
+Firmware files:
+
+```text
+/var/lib/openwrt-builder/firmware/<router>/<release>/
+/var/lib/openwrt-builder/firmware/<router>/latest/
+```
+
+HTTP:
+
+```text
+http://CONTAINER_IP:8088/firmware/<router>/latest/<sysupgrade-file>
+```
+
+### Address of the sysupgrade server
+
+Install `luci-app-attendedsysupgrade` on OpenWrt and set the server root:
+
+```text
+http://CONTAINER_IP:8088
+```
+
+Do not add `/api/asu` unless your client is already configured that way. Compatible endpoints are served from the root:
+
+```text
+http://CONTAINER_IP:8088/json/v1/overview.json
+http://CONTAINER_IP:8088/json/v1/latest.json
+http://CONTAINER_IP:8088/api/v1/build
+```
+
+The service also responds under `/api/asu/...` for older saved settings.
+
+This is a local prebuilder, not a full upstream ASU clone. The most reliable workflow is: the application prebuilds firmware, the router gets the ready sysupgrade file URL, and OpenWrt performs a normal `sysupgrade`.
+
+### Manual router upgrade
+
+```sh
+cd /tmp
+wget -O fw.bin http://CONTAINER_IP:8088/firmware/cudy-wr3000-v1/latest/openwrt-25.12.x-mediatek-filogic-cudy_wr3000-v1-squashfs-sysupgrade.bin
+sha256sum fw.bin
+sysupgrade fw.bin
+```
+
+Clean upgrade without preserving settings:
+
+```sh
+sysupgrade -n fw.bin
+```
+
+### Useful commands
+
+```bash
+journalctl -u openwrt-builder -f
+systemctl restart openwrt-builder
+du -sh /var/lib/openwrt-builder
+find /var/lib/openwrt-builder/firmware -type f
+```

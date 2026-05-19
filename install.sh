@@ -133,6 +133,10 @@ install_files() {
   install -m 0755 "$SOURCE_DIR/app.py" "$APP_DIR/app.py"
   install -m 0644 "$SOURCE_DIR/README.md" "$APP_DIR/README.md" 2>/dev/null || true
   install -m 0644 "$SOURCE_DIR/example-config.json" "$APP_DIR/example-config.json" 2>/dev/null || true
+  if [ -d "$SOURCE_DIR/locales" ]; then
+    install -d -m 0755 "$APP_DIR/locales"
+    install -m 0644 "$SOURCE_DIR/locales/"*.json "$APP_DIR/locales/" 2>/dev/null || true
+  fi
   printf '%s\n' "${REF}" >"$APP_DIR/VERSION"
   if [ -d "$SOURCE_DIR/.git" ]; then
     git -C "$SOURCE_DIR" rev-parse HEAD >"$APP_DIR/COMMIT" 2>/dev/null || true
@@ -257,7 +261,7 @@ print_summary() {
 
   cat <<EOF
 
-Installed OpenWrt Builder.
+Installed OpenWrt Custom Local Builder.
 
 Web UI:
   http://${ip}:${PORT}
