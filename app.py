@@ -719,10 +719,10 @@ INDEX_HTML = r"""<!doctype html>
   <section>
     <h2>Основные настройки</h2>
     <div class="grid">
-      <label>Публичный URL сервера <input id="public_base_url"></label>
-      <label>Ветка релизов <input id="release_branch_prefix" placeholder="25."></label>
-      <label>Проверять каждые, минут <input id="check_interval_minutes" type="number" min="5"></label>
-      <label>Разрешить untrusted APK <select id="allow_untrusted_apk"><option value="true">Да</option><option value="false">Нет</option></select></label>
+      <label>Публичный URL сервера <input id="public_base_url" oninput="scheduleSave()"></label>
+      <label>Ветка релизов <input id="release_branch_prefix" placeholder="25." oninput="scheduleSave()"></label>
+      <label>Проверять каждые, минут <input id="check_interval_minutes" type="number" min="5" oninput="scheduleSave()"></label>
+      <label>Разрешить untrusted APK <select id="allow_untrusted_apk" onchange="scheduleSave()"><option value="true">Да</option><option value="false">Нет</option></select></label>
     </div>
   </section>
   <section>
@@ -761,6 +761,9 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 let cfg = {};
 let searchTimer = null;
+let saveTimer = null;
+let dirty = false;
+let deviceResultCache = [];
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -774,17 +777,17 @@ function renderRouters() {
   routers.innerHTML = (cfg.routers || []).map((r, i) => `
     <div class="item">
       <div class="grid">
-        <label>Название <input value="${esc(r.name)}" oninput="cfg.routers[${i}].name=this.value"></label>
-        <label>Target <input value="${esc(r.target)}" placeholder="mediatek" oninput="cfg.routers[${i}].target=this.value"></label>
-        <label>Subtarget <input value="${esc(r.subtarget)}" placeholder="filogic" oninput="cfg.routers[${i}].subtarget=this.value"></label>
-        <label>Profile <input value="${esc(r.profile)}" placeholder="glinet_gl-mt6000" oninput="cfg.routers[${i}].profile=this.value"></label>
+        <label>Название <input value="${esc(r.name)}" oninput="cfg.routers[${i}].name=this.value; scheduleSave()"></label>
+        <label>Target <input value="${esc(r.target)}" placeholder="mediatek" oninput="cfg.routers[${i}].target=this.value; scheduleSave()"></label>
+        <label>Subtarget <input value="${esc(r.subtarget)}" placeholder="filogic" oninput="cfg.routers[${i}].subtarget=this.value; scheduleSave()"></label>
+        <label>Profile <input value="${esc(r.profile)}" placeholder="glinet_gl-mt6000" oninput="cfg.routers[${i}].profile=this.value; scheduleSave()"></label>
       </div>
       <div class="grid">
-        <label>Arch APK <input value="${esc(r.arch)}" placeholder="aarch64_cortex-a53" oninput="cfg.routers[${i}].arch=this.value"></label>
-        <label>Включен <select onchange="cfg.routers[${i}].enabled=this.value==='true'"><option value="true" ${r.enabled!==false?'selected':''}>Да</option><option value="false" ${r.enabled===false?'selected':''}>Нет</option></select></label>
+        <label>Arch APK <input value="${esc(r.arch)}" placeholder="aarch64_cortex-a53" oninput="cfg.routers[${i}].arch=this.value; scheduleSave()"></label>
+        <label>Включен <select onchange="cfg.routers[${i}].enabled=this.value==='true'; scheduleSave()"><option value="true" ${r.enabled!==false?'selected':''}>Да</option><option value="false" ${r.enabled===false?'selected':''}>Нет</option></select></label>
       </div>
-      <label>Пакеты ImageBuilder <textarea oninput="cfg.routers[${i}].packages=this.value">${esc(r.packages)}</textarea></label>
-      <div class="row"><button class="danger" onclick="cfg.routers.splice(${i},1);renderRouters()">Удалить</button><button class="secondary" onclick="buildNow('${esc(r.name)}')">Собрать этот</button></div>
+      <label>Индивидуальные пакеты ImageBuilder для этого роутера <textarea oninput="cfg.routers[${i}].packages=this.value; scheduleSave()">${esc(r.packages)}</textarea></label>
+      <div class="row"><button class="danger" onclick="cfg.routers.splice(${i},1);renderRouters(); save()">Удалить</button><button class="secondary" onclick="buildNow('${esc(r.name)}')">Собрать этот</button></div>
     </div>`).join('');
 }
 
@@ -792,14 +795,14 @@ function renderSources() {
   sources.innerHTML = (cfg.package_sources || []).map((s, i) => `
     <div class="item">
       <div class="grid">
-        <label>Название <input value="${esc(s.name)}" oninput="cfg.package_sources[${i}].name=this.value"></label>
-        <label>URL .apk или repo <input value="${esc(s.url)}" placeholder="https://repo.local/{release}/{arch}/" oninput="cfg.package_sources[${i}].url=this.value"></label>
-        <label>Arch фильтр <input value="${esc(s.arch)}" placeholder="aarch64_cortex-a53" oninput="cfg.package_sources[${i}].arch=this.value"></label>
-        <label>Включен <select onchange="cfg.package_sources[${i}].enabled=this.value==='true'"><option value="true" ${s.enabled!==false?'selected':''}>Да</option><option value="false" ${s.enabled===false?'selected':''}>Нет</option></select></label>
+        <label>Название <input value="${esc(s.name)}" oninput="cfg.package_sources[${i}].name=this.value; scheduleSave()"></label>
+        <label>URL .apk или repo <input value="${esc(s.url)}" placeholder="https://repo.local/{release}/{arch}/" oninput="cfg.package_sources[${i}].url=this.value; scheduleSave()"></label>
+        <label>Arch фильтр <input value="${esc(s.arch)}" placeholder="aarch64_cortex-a53" oninput="cfg.package_sources[${i}].arch=this.value; scheduleSave()"></label>
+        <label>Включен <select onchange="cfg.package_sources[${i}].enabled=this.value==='true'; scheduleSave()"><option value="true" ${s.enabled!==false?'selected':''}>Да</option><option value="false" ${s.enabled===false?'selected':''}>Нет</option></select></label>
       </div>
-      <label>Имена пакетов из этого repo <textarea placeholder="my-package another-package" oninput="cfg.package_sources[${i}].packages=this.value">${esc(s.packages || s.package_names || '')}</textarea></label>
-      <label>Regex имени APK <input value="${esc(s.regex)}" placeholder="my-package_.*\\.apk" oninput="cfg.package_sources[${i}].regex=this.value"></label>
-      <button class="danger" onclick="cfg.package_sources.splice(${i},1);renderSources()">Удалить</button>
+      <label>Имена пакетов из этого repo <textarea placeholder="my-package another-package" oninput="cfg.package_sources[${i}].packages=this.value; scheduleSave()">${esc(s.packages || s.package_names || '')}</textarea></label>
+      <label>Regex имени APK <input value="${esc(s.regex)}" placeholder="my-package_.*\\.apk" oninput="cfg.package_sources[${i}].regex=this.value; scheduleSave()"></label>
+      <button class="danger" onclick="cfg.package_sources.splice(${i},1);renderSources(); save()">Удалить</button>
     </div>`).join('');
 }
 
@@ -818,17 +821,34 @@ function pullForm() {
   cfg.allow_untrusted_apk = allow_untrusted_apk.value === 'true';
 }
 
+function scheduleSave() {
+  dirty = true;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 800);
+}
+
 function addRouter() {
   cfg.routers = cfg.routers || [];
-  cfg.routers.push({name:'router', target:'', subtarget:'', profile:'', arch:'', packages:'luci luci-app-attendedsysupgrade owut', enabled:true});
+  cfg.routers.push({name:uniqueRouterName('router'), target:'', subtarget:'', profile:'', arch:'', packages:'luci luci-app-attendedsysupgrade owut', enabled:true});
   renderRouters();
+  save();
+}
+
+function uniqueRouterName(base) {
+  base = base || 'router';
+  const existing = new Set((cfg.routers || []).map(r => r.name));
+  let name = base;
+  let index = 2;
+  while (existing.has(name)) name = `${base}-${index++}`;
+  return name;
 }
 
 function addDeviceRouter(device) {
   cfg.routers = cfg.routers || [];
   const safeName = device.name || device.profile || 'router';
+  const baseName = safeName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-|-$/g, '') || device.profile;
   cfg.routers.push({
-    name: safeName.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-|-$/g, '') || device.profile,
+    name: uniqueRouterName(baseName),
     target: device.target || '',
     subtarget: device.subtarget || '',
     profile: device.profile || '',
@@ -839,15 +859,22 @@ function addDeviceRouter(device) {
   deviceResults.innerHTML = '';
   deviceSearch.value = '';
   renderRouters();
+  save();
+}
+
+function addDeviceRouterByIndex(index) {
+  const device = deviceResultCache[index];
+  if (device) addDeviceRouter(device);
 }
 
 function renderDeviceResults(report) {
   const devices = report.devices || [];
+  deviceResultCache = devices;
   deviceResults.innerHTML = devices.length ? devices.map((d, i) => `
     <div class="item">
       <div><b>${esc(d.name)}</b> <span class="pill">${esc(d.profile)}</span></div>
       <div class="muted">${esc(d.target)}/${esc(d.subtarget)} · ${esc(d.arch || 'arch unknown')} · OpenWrt ${esc(report.release)}</div>
-      <button class="secondary" onclick='addDeviceRouter(${JSON.stringify(d).replace(/'/g, '&apos;')})'>Выбрать</button>
+      <button class="secondary" onclick="addDeviceRouterByIndex(${i})">Выбрать</button>
     </div>`).join('') : '<div class="muted">Ничего не найдено.</div>';
 }
 
@@ -873,11 +900,14 @@ function addSource() {
   cfg.package_sources = cfg.package_sources || [];
   cfg.package_sources.push({name:'custom', url:'', arch:'', packages:'', regex:'', enabled:true});
   renderSources();
+  save();
 }
 
 async function save() {
+  clearTimeout(saveTimer);
   pullForm();
   await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
+  dirty = false;
   await load();
 }
 
@@ -906,11 +936,11 @@ async function scanRepos() {
 }
 
 async function load() {
-  cfg = await api('/api/config');
+  if (!dirty) cfg = await api('/api/config');
   const st = await api('/api/status');
   latest.textContent = 'Latest: ' + (st.latest_release || 'unknown');
   jobs.innerHTML = (st.jobs || []).map(j => `<div class="item"><b>${esc(j.router)} ${esc(j.release)}</b><span class="pill">${esc(j.status)}</span><span class="muted">${esc(j.updated_at)}</span>${j.output ? `<a href="${esc(j.output)}">firmware</a>` : ''}${j.error ? `<pre>${esc(j.error)}</pre>` : ''}<a href="${esc(j.log)}">log</a></div>`).join('');
-  bindConfig();
+  if (!dirty) bindConfig();
 }
 load();
 setInterval(load, 15000);
