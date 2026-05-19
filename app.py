@@ -1796,7 +1796,11 @@ async function runUpdate() {
     versionStatus.textContent = 'Обновление запущено. Сервис перезапустится, обновите страницу через 10-20 секунд.';
     if (result.log) viewLog(result.log, 'Обновление приложения');
   } catch (e) {
-    versionStatus.textContent = 'Обновление не запустилось: ' + e.message;
+    if (String(e.message || '').includes('Failed to fetch')) {
+      versionStatus.textContent = 'Соединение прервано: сервис, вероятно, уже перезапускается. Обновите страницу через 10-20 секунд.';
+    } else {
+      versionStatus.textContent = 'Обновление не запустилось: ' + e.message;
+    }
     viewLog('/logs/self-update.log', 'Обновление приложения');
   }
 }
