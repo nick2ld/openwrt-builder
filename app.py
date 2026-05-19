@@ -832,7 +832,7 @@ INDEX_HTML = r"""<!doctype html>
   <section>
     <div class="section-head">
       <h2>Внешние APK / репозитории</h2>
-      <button class="secondary" onclick="addSource()">Добавить источник</button>
+      <button class="secondary" onclick="openSourceModal()">Добавить источник</button>
     </div>
     <div id="sources"></div>
   </section>
@@ -880,6 +880,26 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </div>
 </div>
+<div id="sourceModal" class="modal-backdrop">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="sourceModalTitle">Источник APK</h2>
+      <button class="secondary" onclick="closeSourceModal()">Закрыть</button>
+    </div>
+    <div class="grid">
+      <label>Название <input id="sourceName" placeholder="custom-packages"></label>
+      <label>URL .apk или repo <input id="sourceUrl" placeholder="https://repo.local/{release}/{arch}/"></label>
+      <label>Arch фильтр <input id="sourceArch" placeholder="aarch64_cortex-a53"></label>
+      <label>Включен <select id="sourceEnabled"><option value="true">Да</option><option value="false">Нет</option></select></label>
+    </div>
+    <label>Имена пакетов из этого repo <textarea id="sourcePackages" placeholder="my-package another-package"></textarea></label>
+    <label>Regex имени APK <input id="sourceRegex" placeholder="my-package_.*\\.apk"></label>
+    <div class="row">
+      <button onclick="saveSourceModal()">Сохранить источник</button>
+      <button class="secondary" onclick="closeSourceModal()">Отмена</button>
+    </div>
+  </div>
+</div>
 <script>
 let cfg = {};
 let searchTimer = null;
@@ -887,6 +907,7 @@ let saveTimer = null;
 let dirty = false;
 let deviceResultCache = [];
 let editingRouterIndex = null;
+let editingSourceIndex = null;
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -925,18 +946,30 @@ function renderRouters() {
 }
 
 function renderSources() {
-  sources.innerHTML = (cfg.package_sources || []).map((s, i) => `
-    <div class="item">
-      <div class="grid">
-        <label>Название <input value="${esc(s.name)}" oninput="cfg.package_sources[${i}].name=this.value; scheduleSave()"></label>
-        <label>URL .apk или repo <input value="${esc(s.url)}" placeholder="https://repo.local/{release}/{arch}/" oninput="cfg.package_sources[${i}].url=this.value; scheduleSave()"></label>
-        <label>Arch фильтр <input value="${esc(s.arch)}" placeholder="aarch64_cortex-a53" oninput="cfg.package_sources[${i}].arch=this.value; scheduleSave()"></label>
-        <label>Включен <select onchange="cfg.package_sources[${i}].enabled=this.value==='true'; scheduleSave()"><option value="true" ${s.enabled!==false?'selected':''}>Да</option><option value="false" ${s.enabled===false?'selected':''}>Нет</option></select></label>
-      </div>
-      <label>Имена пакетов из этого repo <textarea placeholder="my-package another-package" oninput="cfg.package_sources[${i}].packages=this.value; scheduleSave()">${esc(s.packages || s.package_names || '')}</textarea></label>
-      <label>Regex имени APK <input value="${esc(s.regex)}" placeholder="my-package_.*\\.apk" oninput="cfg.package_sources[${i}].regex=this.value; scheduleSave()"></label>
-      <button class="danger" onclick="cfg.package_sources.splice(${i},1);renderSources(); save()">Удалить</button>
-    </div>`).join('');
+  const list = cfg.package_sources || [];
+  if (!list.length) {
+    sources.innerHTML = '<div class="item"><b>Источники APK еще не добавлены</b><div class="muted">Добавьте repo или прямую ссылку на APK, чтобы сервис сам скачивал нужные пакеты под arch роутера.</div></div>';
+    return;
+  }
+  sources.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Название</th><th>URL</th><th>Arch</th><th>Пакеты</th><th></th></tr></thead>
+        <tbody>
+          ${list.map((s, i) => `
+            <tr>
+              <td><b>${esc(s.name || 'source')}</b><div class="muted">${s.enabled === false ? 'выключен' : 'включен'}</div></td>
+              <td>${esc(s.url || '')}</td>
+              <td>${esc(s.arch || 'любой')}</td>
+              <td>${esc(s.packages || s.package_names || s.regex || 'по regex/все найденные')}</td>
+              <td><div class="actions">
+                <button class="secondary" onclick="openSourceModal(${i})">Редактировать</button>
+                <button class="danger" onclick="deleteSource(${i})">Удалить</button>
+              </div></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 function bindConfig() {
@@ -1083,9 +1116,54 @@ function searchDevices() {
   }, 300);
 }
 
-function addSource() {
+function emptySource() {
+  return {name:'custom', url:'', arch:'', packages:'', regex:'', enabled:true};
+}
+
+function openSourceModal(index = null) {
+  editingSourceIndex = index;
+  const source = index === null ? emptySource() : {...(cfg.package_sources[index] || emptySource())};
+  sourceModalTitle.textContent = index === null ? 'Добавить источник APK' : 'Редактировать источник APK';
+  sourceName.value = source.name || '';
+  sourceUrl.value = source.url || '';
+  sourceArch.value = source.arch || '';
+  sourceEnabled.value = source.enabled === false ? 'false' : 'true';
+  sourcePackages.value = source.packages || source.package_names || '';
+  sourceRegex.value = source.regex || '';
+  sourceModal.classList.add('open');
+}
+
+function closeSourceModal() {
+  sourceModal.classList.remove('open');
+  editingSourceIndex = null;
+}
+
+function sourceFromModal() {
+  return {
+    name: sourceName.value.trim() || 'custom',
+    url: sourceUrl.value.trim(),
+    arch: sourceArch.value.trim(),
+    packages: sourcePackages.value.trim(),
+    regex: sourceRegex.value.trim(),
+    enabled: sourceEnabled.value === 'true'
+  };
+}
+
+async function saveSourceModal() {
   cfg.package_sources = cfg.package_sources || [];
-  cfg.package_sources.push({name:'custom', url:'', arch:'', packages:'', regex:'', enabled:true});
+  const source = sourceFromModal();
+  if (editingSourceIndex === null) {
+    cfg.package_sources.push(source);
+  } else {
+    cfg.package_sources[editingSourceIndex] = source;
+  }
+  renderSources();
+  closeSourceModal();
+  await save();
+}
+
+function deleteSource(index) {
+  cfg.package_sources.splice(index, 1);
   renderSources();
   save();
 }
