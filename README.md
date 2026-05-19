@@ -15,13 +15,19 @@
 В LXC выполните одной командой:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/v0.1.0/install.sh | sudo bash
 ```
 
 Если нужен нестандартный порт:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo PORT=8090 bash
+curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/v0.1.0/install.sh | sudo PORT=8090 bash
+```
+
+Для установки самой свежей версии из `main`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo bash
 ```
 
 Также можно скопировать каталог в контейнер и запустить локально:
