@@ -18,10 +18,10 @@
   ],
   "package_sources": [
     {
-      "name": "my-custom-apk",
-      "url": "https://example.local/openwrt/{release}/{arch}/",
+      "name": "amneziawg",
+      "url": "https://github.com/Slava-Shchipunov/awg-openwrt/releases",
       "arch": "aarch64_cortex-a53",
-      "packages": "my-package another-package",
+      "packages": "amneziawg-tools kmod-amneziawg luci-i18n-amneziawg-ru luci-proto-amneziawg",
       "regex": "",
       "enabled": true
     },

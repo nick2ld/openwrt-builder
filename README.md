@@ -104,6 +104,7 @@ luci luci-ssl luci-app-attendedsysupgrade owut htop irqbalance
 - прямая ссылка на `.apk`
 - ссылка на HTML-индекс, где лежат `.apk`
 - корень репозитория с подпапками версии и архитектуры
+- страница GitHub Releases, например `https://github.com/Slava-Shchipunov/awg-openwrt/releases`
 
 В URL можно использовать шаблоны:
 
@@ -134,6 +135,25 @@ my-package another-package luci-app-custom
 ```
 
 Сервис для каждого выбранного роутера берет его `arch`, обходит выбранные репозитории, ищет `.apk` с подходящей архитектурой (`_<arch>.apk`) или универсальные (`_all.apk`), выбирает самый свежий файл по имени версии и скачивает его. Если поле имен пустое, он скачает все подходящие APK из найденного индекса; обычно лучше имена указать явно.
+
+Для GitHub Releases сервис использует GitHub API, выбирает release под текущую версию OpenWrt и дополнительно фильтрует assets по платформе роутера. Например для `Slava-Shchipunov/awg-openwrt` добавьте источник:
+
+```text
+Название: amneziawg
+URL: https://github.com/Slava-Shchipunov/awg-openwrt/releases
+Arch фильтр: можно оставить пустым или указать arch конкретного роутера
+Имена пакетов:
+amneziawg-tools kmod-amneziawg luci-i18n-amneziawg-ru luci-proto-amneziawg
+```
+
+Для роутера `mediatek/filogic` и `aarch64_cortex-a53` он будет искать файлы вида:
+
+```text
+amneziawg-tools_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+kmod-amneziawg_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+luci-i18n-amneziawg-ru_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+luci-proto-amneziawg_v25.12.4_aarch64_cortex-a53_mediatek_filogic.apk
+```
 
 Для HTML-индекса дополнительно можно задать `regex`, например:
 

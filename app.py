@@ -423,13 +423,68 @@ def package_requested(filename, requested):
     return package in requested or any(filename.startswith(name + "_") or filename.startswith(name + "-") for name in requested)
 
 
-def apk_matches_arch(filename, arch):
+def apk_matches_platform(filename, arch, target="", subtarget=""):
     if not arch:
-        return True
-    return filename.endswith(f"_{arch}.apk") or filename.endswith("_all.apk") or arch in filename
+        arch_ok = True
+    else:
+        arch_ok = filename.endswith(f"_{arch}.apk") or f"_{arch}_" in filename or "_all.apk" in filename
+    if not arch_ok:
+        return False
+    if target and subtarget:
+        platform = f"_{target}_{subtarget}.apk"
+        return filename.endswith(platform) or filename.endswith(f"_{arch}.apk") or filename.endswith("_all.apk")
+    return True
 
 
-def list_apks_from_index(url, src, release, arch, requested, log):
+def github_repo_from_url(url):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc.lower() != "github.com":
+        return None
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    if len(parts) >= 2:
+        return f"{parts[0]}/{parts[1]}"
+    return None
+
+
+def list_apks_from_github_releases(url, src, release, arch, target, subtarget, requested, log):
+    repo = src.get("github_repo") or github_repo_from_url(url)
+    if not repo:
+        return []
+    api = f"https://api.github.com/repos/{repo}/releases"
+    try:
+        releases = json.loads(http_text(api))
+    except Exception as exc:
+        log(f"Could not read GitHub releases {repo}: {exc}")
+        return []
+    wanted = release.lower().lstrip("v")
+    assets = []
+    for rel in releases:
+        tag = str(rel.get("tag_name", "")).lower().lstrip("v")
+        name = str(rel.get("name", "")).lower().lstrip("v")
+        if wanted not in [tag, name] and not tag.startswith(wanted):
+            continue
+        assets.extend(rel.get("assets", []) or [])
+    if not assets and releases:
+        assets = releases[0].get("assets", []) or []
+    regex = src.get("regex", "").strip()
+    rx = re.compile(regex) if regex else None
+    links = []
+    for asset in assets:
+        filename = asset.get("name", "")
+        url = asset.get("browser_download_url", "")
+        if not filename.endswith(".apk") or not url:
+            continue
+        if rx and not rx.search(filename):
+            continue
+        if not apk_matches_platform(filename, arch, target, subtarget):
+            continue
+        if not package_requested(filename, requested):
+            continue
+        links.append(url)
+    return links
+
+
+def list_apks_from_index(url, src, release, arch, target, subtarget, requested, log):
     try:
         text = http_text(url)
     except urllib.error.HTTPError as exc:
@@ -449,7 +504,7 @@ def list_apks_from_index(url, src, release, arch, requested, log):
         filename = Path(urllib.parse.urlparse(full).path).name
         if rx and not rx.search(filename):
             continue
-        if not apk_matches_arch(filename, arch):
+        if not apk_matches_platform(filename, arch, target, subtarget):
             continue
         if not package_requested(filename, requested):
             continue
@@ -468,7 +523,7 @@ def choose_latest_per_package(links):
     return [selected[k] for k in sorted(selected)]
 
 
-def discover_package_source(src, release, arch, log):
+def discover_package_source(src, release, arch, target="", subtarget="", log=lambda _msg: None):
     url = src.get("url", "").strip()
     if not url:
         return []
@@ -477,13 +532,15 @@ def discover_package_source(src, release, arch, log):
         filename = Path(urllib.parse.urlparse(url).path).name
         if requested and not package_requested(filename, requested):
             return []
-        if not apk_matches_arch(filename, arch):
+        if not apk_matches_platform(filename, arch, target, subtarget):
             return []
         return [url]
     else:
         links = []
+        if src.get("type") == "github_releases" or github_repo_from_url(url):
+            links.extend(list_apks_from_github_releases(url, src, release, arch, target, subtarget, requested, log))
         for candidate in source_candidate_urls(src, release, arch):
-            found = list_apks_from_index(candidate, src, release, arch, requested, log)
+            found = list_apks_from_index(candidate, src, release, arch, target, subtarget, requested, log)
             if found:
                 log(f"Found {len(found)} matching APK(s) in {candidate}")
             links.extend(found)
@@ -493,8 +550,8 @@ def discover_package_source(src, release, arch, log):
         return choose_latest_per_package(links)
 
 
-def resolve_package_source(src, release, arch, log):
-    selected_urls = discover_package_source(src, release, arch, log)
+def resolve_package_source(src, release, arch, target, subtarget, log):
+    selected_urls = discover_package_source(src, release, arch, target, subtarget, log)
     downloaded = []
     for selected in selected_urls:
         filename = Path(urllib.parse.urlparse(selected).path).name
@@ -508,6 +565,8 @@ def resolve_package_source(src, release, arch, log):
 
 def download_external_apks(cfg, release, router, log):
     arch = router.get("arch", "").strip()
+    target = router.get("target", "").strip()
+    subtarget = router.get("subtarget", "").strip()
     result = []
     for src in cfg.get("package_sources", []):
         if not src.get("enabled", True):
@@ -515,7 +574,7 @@ def download_external_apks(cfg, release, router, log):
         source_arch = src.get("arch", "").strip()
         if source_arch and arch and source_arch != arch:
             continue
-        result.extend(resolve_package_source(src, release, arch, log))
+        result.extend(resolve_package_source(src, release, arch, target, subtarget, log))
     return result
 
 
@@ -739,7 +798,14 @@ def scan_repositories():
             source_arch = src.get("arch", "").strip()
             if source_arch and arch and source_arch != arch:
                 continue
-            urls = discover_package_source(src, release, arch, quiet_log)
+            urls = discover_package_source(
+                src,
+                release,
+                arch,
+                router.get("target", "").strip(),
+                router.get("subtarget", "").strip(),
+                quiet_log,
+            )
             router_report["sources"].append({
                 "name": src.get("name") or src.get("url"),
                 "url": src.get("url"),
@@ -960,7 +1026,7 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div class="grid">
       <label>Название <input id="sourceName" placeholder="custom-packages"></label>
-      <label>URL .apk или repo <input id="sourceUrl" placeholder="https://repo.local/{release}/{arch}/"></label>
+      <label>URL .apk, repo или GitHub releases <input id="sourceUrl" placeholder="https://github.com/Slava-Shchipunov/awg-openwrt/releases"></label>
       <label>Arch фильтр <input id="sourceArch" placeholder="aarch64_cortex-a53"></label>
       <label>Включен <select id="sourceEnabled"><option value="true">Да</option><option value="false">Нет</option></select></label>
     </div>
