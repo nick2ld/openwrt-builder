@@ -30,6 +30,7 @@ REPO_URL = f"https://github.com/{REPO_FULL_NAME}"
 DEVICE_CACHE = {}
 RELEASE_CACHE_TTL = 3600
 HTTP_TIMEOUT = int(os.environ.get("OWB_HTTP_TIMEOUT", "20"))
+VERSION_CHECK_TIMEOUT = int(os.environ.get("OWB_VERSION_CHECK_TIMEOUT", "30"))
 
 DEFAULT_CONFIG = {
     "listen_host": "0.0.0.0",
@@ -324,9 +325,36 @@ def installed_version_info():
 
 
 def latest_repo_commit(branch="main"):
-    url = f"https://api.github.com/repos/{REPO_FULL_NAME}/commits/{branch}"
-    data = json.loads(http_text(url, timeout=10))
-    return data.get("sha", "")
+    errors = []
+    urls = [
+        f"https://api.github.com/repos/{REPO_FULL_NAME}/git/ref/heads/{branch}",
+        f"https://api.github.com/repos/{REPO_FULL_NAME}/commits/{branch}",
+    ]
+    for url in urls:
+        try:
+            data = json.loads(http_text(url, timeout=VERSION_CHECK_TIMEOUT))
+            sha = data.get("object", {}).get("sha") or data.get("sha", "")
+            if sha:
+                return sha
+        except Exception as exc:
+            errors.append(f"{urllib.parse.urlparse(url).netloc}: {exc}")
+
+    try:
+        proc = subprocess.run(
+            ["git", "ls-remote", REPO_URL + ".git", f"refs/heads/{branch}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=VERSION_CHECK_TIMEOUT,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.split()[0]
+        if proc.stderr.strip():
+            errors.append(proc.stderr.strip().splitlines()[-1])
+    except Exception as exc:
+        errors.append(f"git ls-remote: {exc}")
+
+    raise RuntimeError("; ".join(errors) or "cannot check latest commit")
 
 
 def version_status():
@@ -335,8 +363,13 @@ def version_status():
     error = ""
     try:
         latest = latest_repo_commit("main")
+        def mutate(st):
+            st["latest_app_commit"] = latest
+            st["latest_app_commit_checked_at"] = utc_now()
+        update_state(mutate)
     except Exception as exc:
         error = str(exc)
+        latest = state().get("latest_app_commit", "")
     current = info.get("commit") or ""
     return {
         **info,
@@ -345,6 +378,8 @@ def version_status():
         "current_short": current[:7] if current else "",
         "latest_short": latest[:7] if latest else "",
         "error": error,
+        "latest_cached": bool(error and latest),
+        "latest_checked_at": state().get("latest_app_commit_checked_at", ""),
     }
 
 
@@ -1641,12 +1676,16 @@ async function checkVersion() {
   repoLink.href = info.repo_url;
   const current = info.current_short || 'unknown';
   const latest = info.latest_short || 'unknown';
-  if (info.error) {
-    versionStatus.textContent = `Версия: ${current}; не удалось проверить latest: ${info.error}`;
-  } else if (!info.current_short) {
+  if (!info.current_short) {
     versionStatus.textContent = `Версия не записана; latest: ${latest}. Обновите из консоли один раз.`;
   } else if (info.update_available) {
-    versionStatus.textContent = `Доступно обновление: ${current} → ${latest}`;
+    versionStatus.textContent = info.latest_cached
+      ? `Доступно обновление: ${current} → ${latest} (latest из кеша; GitHub сейчас не ответил)`
+      : `Доступно обновление: ${current} → ${latest}`;
+  } else if (info.error) {
+    versionStatus.textContent = info.latest_cached
+      ? `Актуальная версия: ${current} (latest из кеша; GitHub сейчас не ответил)`
+      : `Версия: ${current}; GitHub сейчас не ответил`;
   } else {
     versionStatus.textContent = `Актуальная версия: ${current}`;
   }
