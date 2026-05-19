@@ -12,16 +12,16 @@
 
 ## 2. Установка
 
-Если репозиторий приватный, создайте GitHub fine-grained token с доступом `Contents: read` к `nick2ld/openwrt-builder`, затем в LXC выполните одной командой:
-
-```bash
-GITHUB_TOKEN=ghp_xxx bash -c 'curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo GITHUB_TOKEN="$GITHUB_TOKEN" bash'
-```
-
-Если репозиторий станет публичным, команда проще:
+В LXC выполните одной командой:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo bash
+```
+
+Если нужен нестандартный порт:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo PORT=8090 bash
 ```
 
 Также можно скопировать каталог в контейнер и запустить локально:
