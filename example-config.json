@@ -1,0 +1,36 @@
+{
+  "listen_host": "0.0.0.0",
+  "listen_port": 8088,
+  "public_base_url": "http://192.168.1.50:8088",
+  "release_branch_prefix": "25.",
+  "check_interval_minutes": 360,
+  "allow_untrusted_apk": true,
+  "routers": [
+    {
+      "name": "gl-mt6000",
+      "target": "mediatek",
+      "subtarget": "filogic",
+      "profile": "glinet_gl-mt6000",
+      "arch": "aarch64_cortex-a53",
+      "packages": "luci luci-ssl luci-app-attendedsysupgrade owut irqbalance htop",
+      "enabled": true
+    }
+  ],
+  "package_sources": [
+    {
+      "name": "my-custom-apk",
+      "url": "https://example.local/openwrt/{release}/{arch}/",
+      "arch": "aarch64_cortex-a53",
+      "packages": "my-package another-package",
+      "regex": "",
+      "enabled": true
+    },
+    {
+      "name": "direct-apk",
+      "url": "https://example.local/openwrt/pkg/custom_1.0.0-r1_aarch64_cortex-a53.apk",
+      "arch": "aarch64_cortex-a53",
+      "regex": "",
+      "enabled": true
+    }
+  ]
+}

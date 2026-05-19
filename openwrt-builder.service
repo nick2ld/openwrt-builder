@@ -1,0 +1,17 @@
+[Unit]
+Description=Local OpenWrt ImageBuilder web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openwrtbuilder
+WorkingDirectory=/opt/openwrt-builder
+Environment=OWB_DATA=/var/lib/openwrt-builder
+ExecStart=/usr/bin/python3 /opt/openwrt-builder/app.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
