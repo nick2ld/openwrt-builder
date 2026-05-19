@@ -91,6 +91,48 @@ def state():
     return read_json(STATE_PATH, {"last_check": None, "latest_release": None, "jobs": []})
 
 
+def job_progress(status):
+    return {
+        "queued": 0,
+        "checking": 8,
+        "waiting_apks": 35,
+        "running": 18,
+        "downloading": 25,
+        "building": 70,
+        "publishing": 92,
+        "success": 100,
+        "skipped": 100,
+        "failed": 100,
+    }.get(status, 0)
+
+
+def last_log_line(log_url):
+    if not log_url:
+        return ""
+    path = LOG_DIR / Path(str(log_url)).name
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            last = ""
+            for line in fh:
+                if line.strip():
+                    last = line.strip()
+            return last
+    except FileNotFoundError:
+        return ""
+
+
+def enriched_state():
+    st = state()
+    jobs = []
+    for job in st.get("jobs", []):
+        item = dict(job)
+        item.setdefault("progress", job_progress(item.get("status")))
+        item["last_line"] = item.get("last_line") or last_log_line(item.get("log", ""))
+        jobs.append(item)
+    st["jobs"] = jobs
+    return st
+
+
 def update_state(mutator):
     current = state()
     mutator(current)
@@ -577,6 +619,92 @@ def download_external_apks(cfg, release, router, log):
     return result
 
 
+def source_required_packages(src):
+    return split_packages(src.get("packages") or src.get("package_names") or "")
+
+
+def source_applies_to_router(src, router):
+    if not src.get("enabled", True):
+        return False
+    source_arch = src.get("arch", "").strip()
+    router_arch = router.get("arch", "").strip()
+    return not (source_arch and router_arch and source_arch != router_arch)
+
+
+def external_apk_report(cfg, release, router, log=lambda _msg: None):
+    arch = router.get("arch", "").strip()
+    target = router.get("target", "").strip()
+    subtarget = router.get("subtarget", "").strip()
+    sources = []
+    missing = []
+    for src in cfg.get("package_sources", []):
+        if not source_applies_to_router(src, router):
+            continue
+        requested = source_required_packages(src)
+        urls = discover_package_source(src, release, arch, target, subtarget, log)
+        found_names = {package_name_from_apk(Path(urllib.parse.urlparse(url).path).name) for url in urls}
+        missing_names = [name for name in requested if name not in found_names]
+        if requested and missing_names:
+            missing.append({
+                "source": src.get("name") or src.get("url"),
+                "missing": missing_names,
+            })
+        sources.append({
+            "name": src.get("name") or src.get("url"),
+            "url": src.get("url"),
+            "packages": [
+                {
+                    "name": package_name_from_apk(Path(urllib.parse.urlparse(url).path).name),
+                    "file": Path(urllib.parse.urlparse(url).path).name,
+                    "url": url,
+                }
+                for url in urls
+            ],
+            "missing": missing_names if requested else [],
+        })
+    return {"sources": sources, "missing": missing, "ready": not missing}
+
+
+def firmware_manifest_path(router_name, release):
+    return OUTPUT_DIR / router_name / release / "manifest.json"
+
+
+def record_job(job_id, router, release, status, log_path, extra=None):
+    def mutate(st):
+        jobs = [j for j in st.get("jobs", []) if j.get("id") != job_id]
+        previous = next((j for j in st.get("jobs", []) if j.get("id") == job_id), {})
+        job = dict(previous)
+        job.update({
+            "id": job_id,
+            "router": router,
+            "release": release,
+            "status": status,
+            "progress": job_progress(status),
+            "log": f"/logs/{log_path.name}",
+            "last_line": last_log_line(f"/logs/{log_path.name}"),
+            "updated_at": utc_now(),
+        })
+        if extra:
+            job.update(extra)
+        jobs.insert(0, job)
+        st["jobs"] = jobs[:100]
+    update_state(mutate)
+
+
+def waiting_job_for_missing_apks(release, router, report):
+    name = router.get("name", "router")
+    job_id = f"wait-apks-{release}-{re.sub(r'[^a-zA-Z0-9_.-]+', '-', name)}"
+    log_path = LOG_DIR / f"{job_id}.log"
+    missing_text = "; ".join(
+        f"{item['source']}: {', '.join(item['missing'])}" for item in report.get("missing", [])
+    )
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(f"[{utc_now()}] Waiting for APKs for OpenWrt {release}: {missing_text}\n")
+    record_job(job_id, name, release, "waiting_apks", log_path, {
+        "error": f"External APKs are not available yet: {missing_text}",
+    })
+
+
 def split_packages(text):
     if isinstance(text, list):
         return [str(x).strip() for x in text if str(x).strip()]
@@ -687,31 +815,19 @@ def run_build(release, router_name=None, force=False):
             print(line, end="", flush=True)
 
         def set_job(status, extra=None):
-            def mutate(st):
-                jobs = [j for j in st.get("jobs", []) if j.get("id") != job_id]
-                job = {
-                    "id": job_id,
-                    "router": name,
-                    "release": release,
-                    "status": status,
-                    "log": f"/logs/{log_path.name}",
-                    "updated_at": utc_now(),
-                }
-                if extra:
-                    job.update(extra)
-                jobs.insert(0, job)
-                st["jobs"] = jobs[:50]
-            update_state(mutate)
+            record_job(job_id, name, release, status, log_path, extra)
 
         set_job("running")
         try:
             profile = router["profile"]
-            built_marker = OUTPUT_DIR / name / release / "manifest.json"
+            built_marker = firmware_manifest_path(name, release)
             if built_marker.exists() and not force:
                 log("Firmware already exists; skipping")
                 set_job("skipped", {"output": f"/firmware/{name}/{release}/"})
                 continue
+            set_job("downloading")
             builder = ensure_imagebuilder(release, router, log)
+            set_job("checking")
             apks = download_external_apks(cfg, release, router, log)
             local_apks = copy_apks_to_builder(builder, apks)
             if cfg.get("allow_untrusted_apk", True) and local_apks:
@@ -737,6 +853,7 @@ def run_build(release, router_name=None, force=False):
                         "APK_ADD_FLAGS=--allow-untrusted",
                         "APK_OPTS=--allow-untrusted",
                     ])
+            set_job("building")
             log("Running: " + " ".join(cmd))
             with log_path.open("a", encoding="utf-8") as logfh:
                 proc = subprocess.run(cmd, cwd=builder, env=env, stdout=logfh, stderr=subprocess.STDOUT)
@@ -745,6 +862,7 @@ def run_build(release, router_name=None, force=False):
             image = find_sysupgrade_image(builder / "bin", profile)
             if not image:
                 raise RuntimeError("No sysupgrade image was produced")
+            set_job("publishing")
             dest_dir = OUTPUT_DIR / name / release
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest_image = dest_dir / image.name
@@ -785,10 +903,24 @@ def check_and_build(force=False, router_name=None):
         st["latest_release"] = release
     update_state(mutate)
 
-    current = state().get("built_release")
-    if force or current != release or router_name:
-        run_build(release, router_name=router_name, force=force)
+    routers = [r for r in cfg.get("routers", []) if r.get("enabled", True)]
+    if router_name:
+        routers = [r for r in routers if r.get("name") == router_name]
+    built_any = False
+    for router in routers:
+        name = router.get("name")
+        if not name:
+            continue
+        if not force and firmware_manifest_path(name, release).exists():
+            continue
+        report = external_apk_report(cfg, release, router)
+        if not report.get("ready", True):
+            waiting_job_for_missing_apks(release, router, report)
+            continue
+        run_build(release, router_name=name, force=force)
+        built_any = True
 
+    if built_any:
         def mark(st):
             st["built_release"] = release
         update_state(mark)
@@ -798,8 +930,30 @@ def check_and_build(force=False, router_name=None):
 def asu_overview():
     st = state()
     cfg = config()
-    latest = st.get("latest_release")
+    try:
+        latest = latest_openwrt_release(cfg.get("release_branch_prefix", "25."), timeout=10, allow_stale_cache=True)
+    except Exception:
+        latest = st.get("latest_release")
+    branch = cfg.get("release_branch_prefix", "25.").rstrip(".")
+    targets = sorted({
+        f"{r.get('target')}/{r.get('subtarget')}"
+        for r in cfg.get("routers", [])
+        if r.get("enabled", True) and r.get("target") and r.get("subtarget")
+    })
+    latest_versions = [latest] if latest else []
     return {
+        "latest": latest_versions,
+        "branches": {
+            branch: {
+                "name": branch,
+                "versions": latest_versions,
+                "targets": targets,
+                "path": "releases/{version}",
+                "pubkey": "",
+                "snapshot": False,
+            }
+        },
+        "upstream_url": "https://downloads.openwrt.org",
         "server": {
             "version": "local-openwrt-builder-1.0",
             "contact": "local",
@@ -808,7 +962,7 @@ def asu_overview():
             "max_custom_rootfs_size_mb": 1024,
             "max_defaults_length": 0,
         },
-        "versions": [latest] if latest else [],
+        "versions": latest_versions,
         "profiles": [
             {
                 "name": r.get("name"),
@@ -834,40 +988,48 @@ def scan_repositories():
 
     for router in [r for r in cfg.get("routers", []) if r.get("enabled", True)]:
         arch = router.get("arch", "").strip()
+        package_report = external_apk_report(cfg, release, router, quiet_log)
         router_report = {
             "router": router.get("name"),
             "arch": arch,
             "release": release,
-            "sources": [],
+            "ready": package_report.get("ready", True),
+            "missing": package_report.get("missing", []),
+            "sources": package_report.get("sources", []),
         }
-        for src in cfg.get("package_sources", []):
-            if not src.get("enabled", True):
-                continue
-            source_arch = src.get("arch", "").strip()
-            if source_arch and arch and source_arch != arch:
-                continue
-            urls = discover_package_source(
-                src,
-                release,
-                arch,
-                router.get("target", "").strip(),
-                router.get("subtarget", "").strip(),
-                quiet_log,
-            )
-            router_report["sources"].append({
-                "name": src.get("name") or src.get("url"),
-                "url": src.get("url"),
-                "packages": [
-                    {
-                        "name": package_name_from_apk(Path(urllib.parse.urlparse(url).path).name),
-                        "file": Path(urllib.parse.urlparse(url).path).name,
-                        "url": url,
-                    }
-                    for url in urls
-                ],
-            })
         report.append(router_report)
     return {"release": release, "routers": report, "checked_at": utc_now()}
+
+
+def clear_old_jobs():
+    for root in [LOG_DIR, DOWNLOAD_DIR, BUILD_DIR]:
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+
+    def mutate(st):
+        st["jobs"] = []
+        st["last_error"] = ""
+        st["cleanup_at"] = utc_now()
+    update_state(mutate)
+    return {"status": "ok", "cleaned_at": utc_now()}
+
+
+def asu_latest():
+    overview = asu_overview()
+    return {"latest": overview.get("latest", [])}
+
+
+def asu_branches():
+    return list(asu_overview().get("branches", {}).values())
+
+
+def asu_revision(version, target, subtarget):
+    try:
+        profiles = load_profiles_json(version, f"{target}/{subtarget}")
+        return {"revision": profiles.get("version_code", "")}
+    except Exception as exc:
+        return {"detail": f"Failed to fetch revision for {version}/{target}/{subtarget}: {exc}", "status": 400}
 
 
 class Scheduler(threading.Thread):
@@ -952,14 +1114,19 @@ INDEX_HTML = r"""<!doctype html>
     .modal-backdrop { position: fixed; inset: 0; background: rgba(32,33,36,.46); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 20; }
     .modal-backdrop.open { display: flex; }
     .modal { width: min(980px, 100%); max-height: 92vh; overflow: auto; background: white; border-radius: 8px; border: 1px solid var(--border); box-shadow: var(--shadow); padding: 20px; display: grid; gap: 16px; }
+    .modal.log-modal { width: min(1080px, 100%); }
     .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 4px; }
     .modal-head h2 { margin: 0; font-size: 19px; }
     textarea.packages { min-height: 190px; font-family: "Roboto Mono", ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; line-height: 1.5; }
     .muted { color: var(--muted); font-size: 13px; }
     .pill { display: inline-flex; align-items: center; background: var(--primary-soft); color: #174ea6; border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 700; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; background: var(--success); }
+    .job-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .progress { height: 8px; border-radius: 999px; background: #edf1f7; overflow: hidden; }
+    .progress > span { display: block; height: 100%; width: 0; background: var(--primary); transition: width .2s ease; }
+    .last-line { font-family: "Roboto Mono", ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; }
-    pre { white-space: pre-wrap; background: #202124; color: #e8eaed; padding: 14px; border-radius: 8px; max-height: 260px; overflow: auto; }
+    pre { white-space: pre-wrap; background: #202124; color: #e8eaed; padding: 14px; border-radius: 8px; max-height: 64vh; overflow: auto; }
     footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 28px; color: var(--muted); }
     .footer-bar { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 1px 2px rgba(60,64,67,.06); }
     .footer-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -1025,19 +1192,11 @@ INDEX_HTML = r"""<!doctype html>
     <div id="scan" class="muted">Еще не запускалась.</div>
   </section>
   <section>
-    <h2>Задания</h2>
-    <div id="jobs"></div>
-  </section>
-  <section>
     <div class="section-head">
-      <h2>Лог</h2>
-      <div class="row">
-        <button class="secondary" onclick="refreshSelectedLog()">Обновить лог</button>
-        <button class="secondary" onclick="copySelectedLog()">Копировать</button>
-      </div>
+      <h2>Задания</h2>
+      <button class="danger" onclick="cleanupJobs()">Очистить старые задания</button>
     </div>
-    <div id="logTitle" class="muted">Выберите задание, чтобы открыть лог.</div>
-    <pre id="mainLog"></pre>
+    <div id="jobs"></div>
   </section>
 </main>
 <footer>
@@ -1095,6 +1254,19 @@ INDEX_HTML = r"""<!doctype html>
       <button onclick="saveSourceModal()">Сохранить источник</button>
       <button class="secondary" onclick="closeSourceModal()">Отмена</button>
     </div>
+  </div>
+</div>
+<div id="logModal" class="modal-backdrop">
+  <div class="modal log-modal">
+    <div class="modal-head">
+      <h2 id="logTitle">Лог задания</h2>
+      <div class="row">
+        <button class="secondary" onclick="refreshSelectedLog()">Обновить</button>
+        <button class="secondary" onclick="copySelectedLog()">Копировать</button>
+        <button class="secondary" onclick="closeLogModal()">Закрыть</button>
+      </div>
+    </div>
+    <pre id="mainLog"></pre>
   </div>
 </div>
 <script>
@@ -1175,7 +1347,7 @@ function renderSources() {
 function bindConfig() {
   for (const id of ['public_base_url','release_branch_prefix','check_interval_minutes']) document.getElementById(id).value = cfg[id] ?? '';
   allow_untrusted_apk.value = cfg.allow_untrusted_apk ? 'true' : 'false';
-  sysurl.textContent = (cfg.public_base_url || location.origin) + '/api/asu';
+  sysurl.textContent = (cfg.public_base_url || location.origin);
   renderRouters();
   renderSources();
 }
@@ -1391,7 +1563,9 @@ async function scanRepos() {
   scan.innerHTML = report.routers.map(r => `
     <div class="item">
       <b>${esc(r.router)} ${esc(r.release)}</b>
+      <span class="pill">${r.ready ? 'APK найдены' : 'Ожидание APK'}</span>
       <span class="muted">${esc(r.arch)}</span>
+      ${(r.missing || []).length ? `<div class="muted">Не хватает: ${(r.missing || []).map(m => esc(m.source) + ': ' + (m.missing || []).map(esc).join(', ')).join('; ')}</div>` : ''}
       ${r.sources.map(s => `
         <div>
           <b>${esc(s.name)}</b>
@@ -1404,12 +1578,17 @@ async function viewLog(url, label = '') {
   selectedLogUrl = url;
   selectedLogLabel = label || url;
   logTitle.textContent = selectedLogLabel;
+  logModal.classList.add('open');
   await refreshSelectedLog();
 }
 
 function viewJobLog(index) {
   const job = jobCache[index];
   if (job && job.log) viewLog(job.log, `${job.router} ${job.release}`);
+}
+
+function closeLogModal() {
+  logModal.classList.remove('open');
 }
 
 async function refreshSelectedLog() {
@@ -1456,17 +1635,40 @@ async function runUpdate() {
   if (result.log) viewLog(result.log, 'Обновление приложения');
 }
 
+async function cleanupJobs() {
+  if (!confirm('Очистить старые задания, логи, скачанные APK и ImageBuilder? Готовые прошивки останутся на месте.')) return;
+  await api('/api/cleanup', {method:'POST'});
+  selectedLogUrl = '';
+  selectedLogLabel = '';
+  mainLog.textContent = '';
+  closeLogModal();
+  await load();
+}
+
+function renderJob(job, index) {
+  const progress = Math.max(0, Math.min(100, Number(job.progress ?? 0)));
+  const output = job.output ? `<a href="${esc(job.output)}">firmware</a>` : '';
+  const error = job.error ? `<div class="muted">${esc(job.error)}</div>` : '';
+  return `<div class="item">
+    <div class="job-head">
+      <div><b>${esc(job.router)} ${esc(job.release)}</b><div class="muted">${esc(job.updated_at || '')}</div></div>
+      <span class="pill">${esc(job.status)}</span>
+    </div>
+    <div class="progress"><span style="width:${progress}%"></span></div>
+    <div class="last-line">${esc(job.last_line || 'Лог пока пустой')}</div>
+    ${error}
+    <div class="row">${output}<button class="secondary" onclick="viewJobLog(${index})">Лог</button></div>
+  </div>`;
+}
+
 async function load() {
   if (!dirty) cfg = await api('/api/config');
   const st = await api('/api/status');
   latest.textContent = 'Latest: ' + (st.latest_release || 'unknown');
   const jobList = st.jobs || [];
   jobCache = jobList;
-  jobs.innerHTML = jobList.map((j, i) => `<div class="item"><b>${esc(j.router)} ${esc(j.release)}</b><span class="pill">${esc(j.status)}</span><span class="muted">${esc(j.updated_at)}</span>${j.output ? `<a href="${esc(j.output)}">firmware</a>` : ''}${j.error ? `<pre>${esc(j.error)}</pre>` : ''}<button class="secondary" onclick="viewJobLog(${i})">Открыть лог</button></div>`).join('');
-  if (!selectedLogUrl) {
-    const running = jobList.find(j => j.status === 'running' && j.log);
-    if (running) viewLog(running.log, `${running.router} ${running.release}`);
-  } else {
+  jobs.innerHTML = jobList.length ? jobList.map(renderJob).join('') : '<div class="item"><b>Заданий пока нет</b><div class="muted">Cron проверит новые версии автоматически, ручная сборка тоже появится здесь.</div></div>';
+  if (selectedLogUrl && logModal.classList.contains('open')) {
     refreshSelectedLog();
   }
   if (!dirty) bindConfig();
@@ -1508,7 +1710,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/config":
             self.send(200, config())
         elif path == "/api/status":
-            self.send(200, state())
+            self.send(200, enriched_state())
         elif path == "/api/version":
             self.send(200, version_status())
         elif path == "/api/devices":
@@ -1522,8 +1724,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, search_devices(query, limit=max(1, min(limit, 50))))
             except Exception as exc:
                 self.send(200, {"release": None, "devices": [], "error": str(exc)})
-        elif path in ["/api/overview", "/api/v1/overview", "/json/v1/overview.json"]:
+        elif path in [
+            "/api/overview",
+            "/api/v1/overview",
+            "/json/v1/overview.json",
+            "/api/asu/json/v1/overview.json",
+            "/api/asu/api/v1/overview",
+        ]:
             self.send(200, asu_overview())
+        elif path in ["/json/v1/latest.json", "/api/asu/json/v1/latest.json", "/api/v1/latest"]:
+            self.send(200, asu_latest())
+        elif path in ["/json/v1/branches.json", "/api/asu/json/v1/branches.json"]:
+            self.send(200, asu_branches())
+        elif path.startswith("/api/v1/revision/") or path.startswith("/api/asu/api/v1/revision/"):
+            prefix = "/api/asu/api/v1/revision/" if path.startswith("/api/asu/") else "/api/v1/revision/"
+            parts = path[len(prefix):].split("/")
+            if len(parts) >= 3:
+                self.send(200, asu_revision(parts[0], parts[1], "/".join(parts[2:])))
+            else:
+                self.send(400, {"error": "bad revision path"})
         elif path.startswith("/logs/"):
             file_path = LOG_DIR / Path(path).name
             if file_path.exists():
@@ -1549,7 +1768,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/asu":
             self.send(200, {
                 "service": "local-openwrt-builder",
-                "note": "Use /firmware/<router>/latest/<sysupgrade-file> as local sysupgrade URL, or set this base URL in Attended Sysupgrade for discovery-compatible clients.",
+                "note": "Set the Attended Sysupgrade server URL to the root server URL, for example http://IP:8088. Compatibility paths under /api/asu are kept for older saved settings.",
                 "firmware": "/firmware/",
             })
         else:
@@ -1575,7 +1794,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/update":
             run_self_update()
             self.send(202, {"status": "started", "log": "/logs/self-update.log"})
-        elif path in ["/api/v1/build", "/api/build-request"]:
+        elif path == "/api/cleanup":
+            self.send(200, clear_old_jobs())
+        elif path in ["/api/v1/build", "/api/asu/api/v1/build", "/api/build-request"]:
             body = self.read_body()
             board = body.get("profile") or body.get("board") or body.get("target")
             router = None
