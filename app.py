@@ -532,8 +532,7 @@ def discover_package_source(src, release, arch, target="", subtarget="", log=lam
         filename = Path(urllib.parse.urlparse(url).path).name
         if requested and not package_requested(filename, requested):
             return []
-        if not apk_matches_platform(filename, arch, target, subtarget):
-            return []
+        # Прямая ссылка на APK игнорирует проверку маски архитектуры в имени файла
         return [url]
     else:
         links = []
