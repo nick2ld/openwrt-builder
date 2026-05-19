@@ -87,11 +87,22 @@ download_source() {
   command -v curl >/dev/null 2>&1 || die "curl is required"
 
   local tarball="$tmpdir/source.tar.gz"
+  local ref_json="$tmpdir/ref.json"
   local api_url="https://api.github.com/repos/${REPO}/tarball/${REF}"
+  local ref_url="https://api.github.com/repos/${REPO}/commits/${REF}"
   local curl_args=(-fsSL --retry 3 --retry-delay 2)
 
   if [ -n "${GITHUB_TOKEN:-}" ]; then
     curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  fi
+
+  if curl "${curl_args[@]}" "$ref_url" -o "$ref_json"; then
+    SOURCE_COMMIT="$(python3 - "$ref_json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    print(json.load(fh).get("sha", ""))
+PY
+)"
   fi
 
   log "downloading ${REPO}@${REF}"

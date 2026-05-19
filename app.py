@@ -1280,6 +1280,8 @@ async function checkVersion() {
   const latest = info.latest_short || 'unknown';
   if (info.error) {
     versionStatus.textContent = `Версия: ${current}; не удалось проверить latest: ${info.error}`;
+  } else if (!info.current_short) {
+    versionStatus.textContent = `Версия не записана; latest: ${latest}. Обновите из консоли один раз.`;
   } else if (info.update_available) {
     versionStatus.textContent = `Доступно обновление: ${current} → ${latest}`;
   } else {
