@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tarfile
 import threading
@@ -31,6 +32,10 @@ DEVICE_CACHE = {}
 RELEASE_CACHE_TTL = 3600
 HTTP_TIMEOUT = int(os.environ.get("OWB_HTTP_TIMEOUT", "20"))
 VERSION_CHECK_TIMEOUT = int(os.environ.get("OWB_VERSION_CHECK_TIMEOUT", "30"))
+BUILD_LOCK = threading.Lock()
+ACTIVE_JOBS = {}
+ACTIVE_JOBS_LOCK = threading.Lock()
+CANCELLED_JOBS = set()
 
 DEFAULT_CONFIG = {
     "listen_host": "0.0.0.0",
@@ -104,6 +109,7 @@ def job_progress(status):
         "success": 100,
         "skipped": 100,
         "failed": 100,
+        "cancelled": 100,
     }.get(status, 0)
 
 
@@ -738,6 +744,85 @@ def record_job(job_id, router, release, status, log_path, extra=None):
     update_state(mutate)
 
 
+def append_job_log(log_path, msg):
+    line = f"[{utc_now()}] {msg}\n"
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+    print(line, end="", flush=True)
+
+
+def sanitize_job_part(value):
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "job")).strip("-") or "job"
+
+
+def is_job_cancelled(job_id):
+    with ACTIVE_JOBS_LOCK:
+        return job_id in CANCELLED_JOBS
+
+
+def register_process(job_id, proc):
+    with ACTIVE_JOBS_LOCK:
+        ACTIVE_JOBS[job_id] = proc
+
+
+def unregister_process(job_id):
+    with ACTIVE_JOBS_LOCK:
+        ACTIVE_JOBS.pop(job_id, None)
+
+
+def cancel_job(job_id):
+    log_path = LOG_DIR / f"{Path(job_id).name}.log"
+    previous = next((j for j in state().get("jobs", []) if j.get("id") == job_id), {})
+    router = previous.get("router") or ""
+    release = previous.get("release") or ""
+    with ACTIVE_JOBS_LOCK:
+        CANCELLED_JOBS.add(job_id)
+        proc = ACTIVE_JOBS.get(job_id)
+    append_job_log(log_path, "Cancellation requested")
+    if proc and proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            proc.terminate()
+    record_job(job_id, router, release, "cancelled", log_path, {"error": "Cancelled by user"})
+    return {"status": "cancelled", "id": job_id}
+
+
+def enqueue_manual_build(router_name=None, force=True):
+    name = router_name or "all"
+    job_id = f"{int(time.time())}-manual-{sanitize_job_part(name)}"
+    log_path = LOG_DIR / f"{job_id}.log"
+    append_job_log(log_path, "Manual build queued")
+    record_job(job_id, name, "pending", "queued", log_path)
+    thread = threading.Thread(
+        target=lambda: manual_build_worker(job_id, log_path, router_name, force),
+        daemon=True,
+    )
+    thread.start()
+    return {"status": "queued", "id": job_id, "log": f"/logs/{log_path.name}"}
+
+
+def manual_build_worker(job_id, log_path, router_name, force):
+    try:
+        if is_job_cancelled(job_id):
+            record_job(job_id, router_name or "all", "pending", "cancelled", log_path, {"error": "Cancelled by user"})
+            return
+        append_job_log(log_path, "Waiting for build slot")
+        with BUILD_LOCK:
+            if is_job_cancelled(job_id):
+                record_job(job_id, router_name or "all", "pending", "cancelled", log_path, {"error": "Cancelled by user"})
+                return
+            cfg = config()
+            release = latest_openwrt_release(cfg.get("release_branch_prefix", "25."), allow_stale_cache=False)
+            run_build(release, router_name=router_name, force=force, job_id_override=job_id, log_path_override=log_path)
+    except Exception as exc:
+        append_job_log(log_path, f"ERROR: {exc}")
+        status = "cancelled" if is_job_cancelled(job_id) else "failed"
+        record_job(job_id, router_name or "all", "pending", status, log_path, {"error": str(exc)})
+    finally:
+        unregister_process(job_id)
+
+
 def waiting_job_for_missing_apks(release, router, report):
     name = router.get("name", "router")
     job_id = f"wait-apks-{release}-{re.sub(r'[^a-zA-Z0-9_.-]+', '-', name)}"
@@ -842,7 +927,7 @@ def find_sysupgrade_image(out_dir, profile):
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
-def run_build(release, router_name=None, force=False):
+def run_build(release, router_name=None, force=False, job_id_override=None, log_path_override=None):
     cfg = config()
     routers = [r for r in cfg.get("routers", []) if r.get("enabled", True)]
     if router_name:
@@ -852,8 +937,8 @@ def run_build(release, router_name=None, force=False):
 
     for router in routers:
         name = router["name"]
-        job_id = f"{int(time.time())}-{re.sub(r'[^a-zA-Z0-9_.-]+', '-', name)}"
-        log_path = LOG_DIR / f"{job_id}.log"
+        job_id = job_id_override or f"{int(time.time())}-{sanitize_job_part(name)}"
+        log_path = log_path_override or LOG_DIR / f"{job_id}.log"
 
         def log(msg):
             line = f"[{utc_now()}] {msg}\n"
@@ -864,6 +949,10 @@ def run_build(release, router_name=None, force=False):
         def set_job(status, extra=None):
             record_job(job_id, name, release, status, log_path, extra)
 
+        if is_job_cancelled(job_id):
+            log("Build cancelled before start")
+            set_job("cancelled", {"error": "Cancelled by user"})
+            continue
         set_job("running")
         try:
             profile = router["profile"]
@@ -903,9 +992,16 @@ def run_build(release, router_name=None, force=False):
             set_job("building")
             log("Running: " + " ".join(cmd))
             with log_path.open("a", encoding="utf-8") as logfh:
-                proc = subprocess.run(cmd, cwd=builder, env=env, stdout=logfh, stderr=subprocess.STDOUT)
-            if proc.returncode != 0:
-                raise RuntimeError(f"ImageBuilder failed with exit code {proc.returncode}")
+                proc = subprocess.Popen(cmd, cwd=builder, env=env, stdout=logfh, stderr=subprocess.STDOUT, start_new_session=True)
+                register_process(job_id, proc)
+                return_code = proc.wait()
+                unregister_process(job_id)
+            if is_job_cancelled(job_id):
+                log("Build cancelled")
+                set_job("cancelled", {"error": "Cancelled by user"})
+                continue
+            if return_code != 0:
+                raise RuntimeError(f"ImageBuilder failed with exit code {return_code}")
             image = find_sysupgrade_image(builder / "bin", profile)
             if not image:
                 raise RuntimeError("No sysupgrade image was produced")
@@ -1088,7 +1184,8 @@ class Scheduler(threading.Thread):
         while True:
             cfg = config()
             try:
-                check_and_build(force=False)
+                with BUILD_LOCK:
+                    check_and_build(force=False)
             except Exception as exc:
                 def mutate(st):
                     st["last_error"] = str(exc)
@@ -1610,8 +1707,9 @@ async function save() {
 async function buildNow(router) {
   pullForm();
   await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
-  await api('/api/build', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({router, force:true})});
-  setTimeout(load, 1000);
+  const result = await api('/api/build', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({router, force:true})});
+  await load();
+  if (result.log) viewLog(result.log, 'Запуск сборки');
 }
 
 async function scanRepos() {
@@ -1717,6 +1815,8 @@ function renderJob(job, index) {
   const progress = Math.max(0, Math.min(100, Number(job.progress ?? 0)));
   const output = job.output ? `<a href="${esc(job.output)}">firmware</a>` : '';
   const error = job.error ? `<div class="muted">${esc(job.error)}</div>` : '';
+  const canCancel = ['queued','running','downloading','checking','building','publishing','waiting_apks'].includes(job.status);
+  const cancel = canCancel ? `<button class="danger" onclick="cancelJob(${index})">Остановить</button>` : '';
   return `<div class="item">
     <div class="job-head">
       <div><b>${esc(job.router)} ${esc(job.release)}</b><div class="muted">${esc(job.updated_at || '')}</div></div>
@@ -1725,8 +1825,16 @@ function renderJob(job, index) {
     <div class="progress"><span style="width:${progress}%"></span></div>
     <div class="last-line">${esc(job.last_line || 'Лог пока пустой')}</div>
     ${error}
-    <div class="row">${output}<button class="secondary" onclick="viewJobLog(${index})">Лог</button></div>
+    <div class="row">${output}<button class="secondary" onclick="viewJobLog(${index})">Лог</button>${cancel}</div>
   </div>`;
+}
+
+async function cancelJob(index) {
+  const job = jobCache[index];
+  if (!job || !job.id) return;
+  if (!confirm(`Остановить задание ${job.router || job.id}?`)) return;
+  await api('/api/cancel', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({id: job.id})});
+  await load();
 }
 
 async function load() {
@@ -1743,7 +1851,7 @@ async function load() {
 }
 load();
 checkVersion();
-setInterval(load, 15000);
+setInterval(load, 3000);
 </script>
 </body>
 </html>"""
@@ -1855,8 +1963,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_body()
             router = body.get("router")
             force = bool(body.get("force", True))
-            threading.Thread(target=lambda: check_and_build(force=force, router_name=router), daemon=True).start()
-            self.send(202, {"status": "queued"})
+            self.send(202, enqueue_manual_build(router_name=router, force=force))
         elif path == "/api/scan-packages":
             self.send(200, scan_repositories())
         elif path == "/api/update":
@@ -1866,6 +1973,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(500, {"status": "failed", "error": str(exc), "log": "/logs/self-update.log"})
         elif path == "/api/cleanup":
             self.send(200, clear_old_jobs())
+        elif path == "/api/cancel":
+            body = self.read_body()
+            job_id = str(body.get("id", "")).strip()
+            if not job_id:
+                self.send(400, {"error": "missing job id"})
+            else:
+                self.send(200, cancel_job(job_id))
         elif path in ["/api/v1/build", "/api/asu/api/v1/build", "/api/build-request"]:
             body = self.read_body()
             board = body.get("profile") or body.get("board") or body.get("target")
@@ -1874,9 +1988,10 @@ class Handler(BaseHTTPRequestHandler):
                 if board in [item.get("name"), item.get("profile")]:
                     router = item.get("name")
                     break
-            threading.Thread(target=lambda: check_and_build(force=True, router_name=router), daemon=True).start()
+            queued = enqueue_manual_build(router_name=router, force=True)
             self.send(202, {
                 "status": "queued",
+                "request_hash": queued.get("id"),
                 "detail": "Local build queued. Poll the web UI or /firmware/<router>/latest/ for the finished sysupgrade image.",
             })
         else:
