@@ -1112,6 +1112,7 @@ def asu_overview():
                 "path": "releases/{version}",
                 "pubkey": "",
                 "snapshot": False,
+                "package_changes": [],
             }
         },
         "upstream_url": "https://downloads.openwrt.org",
@@ -1191,6 +1192,58 @@ def asu_revision(version, target, subtarget):
         return {"revision": profiles.get("version_code", "")}
     except Exception as exc:
         return {"detail": f"Failed to fetch revision for {version}/{target}/{subtarget}: {exc}", "status": 400}
+
+
+def asu_job_response(job_id):
+    job = next((j for j in state().get("jobs", []) if j.get("id") == job_id), None)
+    if not job:
+        return {"status": 404, "detail": "could not find provided request hash"}, 404
+    status = job.get("status")
+    if status in ["queued", "running", "downloading", "checking", "building", "publishing"]:
+        return {
+            "status": 202,
+            "detail": "started",
+            "request_hash": job_id,
+            "imagebuilder_status": {
+                "queued": "init",
+                "running": "init",
+                "downloading": "download_imagebuilder",
+                "checking": "validate_manifest",
+                "building": "building_image",
+                "publishing": "signing_images",
+            }.get(status, "init"),
+        }, 202
+    if status == "success" and job.get("output"):
+        output = job["output"].lstrip("/")
+        parts = output.split("/")
+        router = parts[1] if len(parts) > 1 else job.get("router", "")
+        release = parts[2] if len(parts) > 2 else job.get("release", "")
+        image_name = parts[-1]
+        manifest = read_json(OUTPUT_DIR / router / release / "manifest.json", {})
+        sha = manifest.get("sha256", "")
+        return {
+            "status": 200,
+            "request_hash": job_id,
+            "version_number": release,
+            "version_code": "",
+            "target": f"{manifest.get('target', '')}/{manifest.get('subtarget', '')}".strip("/"),
+            "id": manifest.get("profile") or router,
+            "build_at": manifest.get("built_at") or job.get("updated_at"),
+            "bin_dir": f"{router}/{release}",
+            "images": [{
+                "name": image_name,
+                "type": "sysupgrade",
+                "filesystem": "squashfs",
+                "sha256": sha,
+                "sha256_unsigned": sha,
+            }],
+        }, 200
+    return {
+        "status": 500,
+        "detail": job.get("error") or status or "failed",
+        "request_hash": job_id,
+        "stderr": last_log_line(job.get("log", "")),
+    }, 500
 
 
 class Scheduler(threading.Thread):
@@ -1884,6 +1937,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[{utc_now()}] {self.address_string()} {fmt % args}", flush=True)
 
+    def cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Cache-Control", "no-store")
+
     def send(self, status, body, content_type="application/json"):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -1892,8 +1952,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.cors_headers()
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.cors_headers()
+        self.end_headers()
 
     def read_body(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -1942,14 +2008,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, asu_revision(parts[0], parts[1], "/".join(parts[2:])))
             else:
                 self.send(400, {"error": "bad revision path"})
+        elif path.startswith("/api/v1/build/") or path.startswith("/api/asu/api/v1/build/"):
+            prefix = "/api/asu/api/v1/build/" if path.startswith("/api/asu/") else "/api/v1/build/"
+            body, status = asu_job_response(urllib.parse.unquote(path[len(prefix):]))
+            self.send(status, body)
         elif path.startswith("/logs/"):
             file_path = LOG_DIR / Path(path).name
             if file_path.exists():
                 self.send(200, read_log_response(file_path), "text/plain; charset=utf-8")
             else:
                 self.send(404, {"error": "not found"})
-        elif path.startswith("/firmware/"):
-            file_path = OUTPUT_DIR / Path(urllib.parse.unquote(path[len("/firmware/"):]))
+        elif path.startswith("/firmware/") or path.startswith("/store/"):
+            prefix = "/store/" if path.startswith("/store/") else "/firmware/"
+            file_path = OUTPUT_DIR / Path(urllib.parse.unquote(path[len(prefix):]))
             if file_path.is_dir():
                 listing = []
                 for p in sorted(file_path.iterdir()):
@@ -1959,6 +2030,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
                 self.send_header("Content-Length", str(file_path.stat().st_size))
+                self.cors_headers()
                 self.end_headers()
                 with file_path.open("rb") as fh:
                     shutil.copyfileobj(fh, self.wfile)
@@ -2015,6 +2087,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(202, {
                 "status": "queued",
                 "request_hash": queued.get("id"),
+                "imagebuilder_status": "init",
+                "queue_position": 0,
                 "detail": "Local build queued. Poll the web UI or /firmware/<router>/latest/ for the finished sysupgrade image.",
             })
         else:

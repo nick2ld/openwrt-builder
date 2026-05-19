@@ -213,6 +213,8 @@ http://IP_КОНТЕЙНЕРА:8088/api/v1/build
 
 Сервис отвечает на ASU overview/latest/branches/revision endpoints и принимает простые build-запросы на `POST /api/v1/build`. Это легкий локальный prebuilder, а не полная копия upstream ASU с Redis/cache/signing API. Если ваш клиент ASU требует строго совместимое поведение upstream-сервера, используйте прямой URL готового sysupgrade-файла:
 
+Для LuCI `luci-app-attendedsysupgrade` сервер также отдает CORS headers, `OPTIONS` preflight, `GET /api/v1/build/<request_hash>` и `/store/<router>/<release>/<file>`, потому что LuCI запускает эти запросы из браузера роутера на другой origin.
+
 ```text
 http://IP_КОНТЕЙНЕРА:8088/firmware/<router>/latest/<имя-sysupgrade-файла>
 ```
