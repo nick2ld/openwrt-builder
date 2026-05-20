@@ -1352,18 +1352,27 @@ def asu_overview():
         if r.get("enabled", True) and r.get("target") and r.get("subtarget")
     })
     latest_versions = [latest] if latest else []
+    branch_keys = []
+    if branch:
+        branch_keys.append(branch)
+    for version in latest_versions:
+        version_branch = ".".join(str(version).replace("-SNAPSHOT", "").split(".")[:2])
+        if version_branch and version_branch not in branch_keys:
+            branch_keys.append(version_branch)
+    branch_info = {
+        "name": "",
+        "versions": latest_versions,
+        "targets": targets,
+        "path": "releases/{version}",
+        "pubkey": "",
+        "snapshot": False,
+        "package_changes": [],
+    }
     return {
         "latest": latest_versions,
         "branches": {
-            branch: {
-                "name": branch,
-                "versions": latest_versions,
-                "targets": targets,
-                "path": "releases/{version}",
-                "pubkey": "",
-                "snapshot": False,
-                "package_changes": [],
-            }
+            key: {**branch_info, "name": key}
+            for key in branch_keys
         },
         "upstream_url": "https://downloads.openwrt.org",
         "server": {
