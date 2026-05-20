@@ -2,6 +2,11 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.1] - 2026-05-21
+
+### Changed
+- Failed jobs now show a red cross icon and cancelled jobs show a neutral dash icon in the job list.
+
 ## [0.2.0] - 2026-05-21
 
 ### Added
@@ -26,4 +31,3 @@ All notable changes to OpenWrt Custom Local Builder are tracked here.
 - Repeated oversized auto-build loops are blocked until the package/source configuration changes.
 - Cached firmware is returned to ASU clients when it matches the requested router and packages.
 - Self-update systemd helper status tracking.
-

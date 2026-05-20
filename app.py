@@ -2142,6 +2142,8 @@ INDEX_HTML = r"""<!doctype html>
     .progress.large { height: 12px; }
     .spinner { width: 34px; height: 34px; border: 4px solid #d2e3fc; border-top-color: var(--primary); border-radius: 50%; animation: spin .85s linear infinite; }
     .checkmark { width: 44px; height: 44px; border-radius: 50%; background: #e6f4ea; color: var(--success); display: grid; place-items: center; font-size: 28px; font-weight: 800; animation: pop .28s ease-out; }
+    .failmark { width: 44px; height: 44px; border-radius: 50%; background: var(--danger-soft); color: var(--danger); display: grid; place-items: center; font-size: 28px; font-weight: 800; animation: pop .28s ease-out; }
+    .cancelmark { width: 44px; height: 44px; border-radius: 50%; background: #f1f3f4; color: var(--muted); display: grid; place-items: center; font-size: 28px; font-weight: 800; animation: pop .28s ease-out; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @keyframes pop { 0% { transform: scale(.55); opacity: .2; } 100% { transform: scale(1); opacity: 1; } }
     .last-line { font-family: "Roboto Mono", ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2982,7 +2984,11 @@ function renderJob(job, index) {
   const active = canCancel && job.status !== 'waiting_apks';
   const icon = job.status === 'success'
     ? '<span class="checkmark" style="width:28px;height:28px;font-size:18px">✓</span>'
-    : (active ? '<span class="spinner" style="width:24px;height:24px;border-width:3px"></span>' : '');
+    : (job.status === 'failed'
+      ? '<span class="failmark" style="width:28px;height:28px;font-size:18px">×</span>'
+      : (job.status === 'cancelled'
+        ? '<span class="cancelmark" style="width:28px;height:28px;font-size:18px">−</span>'
+        : (active ? '<span class="spinner" style="width:24px;height:24px;border-width:3px"></span>' : '')));
   return `<div class="item">
     <div class="job-head">
       <div class="row">${icon}<div><b>${esc(job.router)} ${esc(job.release)}</b><div class="muted">${esc(job.updated_at || '')}</div></div></div>
