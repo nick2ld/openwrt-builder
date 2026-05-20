@@ -60,6 +60,7 @@
   "build": "Собрать",
   "firmwares": "Прошивки",
   "delete": "Удалить",
+  "deleteFirmware": "Удалить прошивку",
   "editRouter": "Редактировать роутер",
   "editSource": "Редактировать источник APK",
   "fieldsLoaded": "Заполнить поля",

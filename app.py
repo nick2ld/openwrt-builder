@@ -1870,6 +1870,9 @@ INDEX_HTML = r"""<!doctype html>
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
     .item { border: 1px solid var(--border); border-radius: 8px; padding: 14px; display: grid; gap: 10px; margin-bottom: 10px; background: #fff; }
+    .firmware-item { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+    .firmware-main { min-width: 0; display: grid; gap: 10px; }
+    .firmware-actions { display: flex; justify-content: flex-end; }
     .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
     table { width: 100%; border-collapse: collapse; min-width: 760px; background: #fff; }
     th, td { text-align: left; border-bottom: 1px solid #edf1f7; padding: 13px 14px; vertical-align: middle; }
@@ -1903,7 +1906,7 @@ INDEX_HTML = r"""<!doctype html>
     .footer-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     a { color: var(--primary); text-decoration: none; font-weight: 700; }
     a:hover { text-decoration: underline; }
-    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .topbar, main { padding-left: 16px; padding-right: 16px; } .topbar { display: grid; height: auto; padding-top: 14px; padding-bottom: 14px; } .toolbar, .section-head { align-items: stretch; } }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .firmware-item { grid-template-columns: 1fr; } .firmware-actions { justify-content: flex-start; } .topbar, main { padding-left: 16px; padding-right: 16px; } .topbar { display: grid; height: auto; padding-top: 14px; padding-bottom: 14px; } .toolbar, .section-head { align-items: stretch; } }
   </style>
 </head>
 <body>
@@ -2356,16 +2359,24 @@ async function openFirmwareModal(index) {
   try {
     const report = await api('/api/router-firmware/' + encodeURIComponent(router.name));
     const list = report.firmware || [];
-    firmwareLinks.innerHTML = list.length ? list.map(item => `
-      <div class="item">
-        <div><b>${esc(item.release)}</b><div class="muted">${esc(item.built_at || '')}</div></div>
-        <div><a href="${esc(item.url)}">${esc(item.name)}</a></div>
-        <div class="muted">${esc(item.sha256 || '')}</div>
-        <div class="row"><button class="danger" onclick="deleteFirmware(${index}, '${encodeURIComponent(item.release)}', '${encodeURIComponent(item.name)}')">${esc(t('delete'))}</button></div>
-      </div>`).join('') : `<div class="item"><b>${esc(t('noFirmwareTitle'))}</b><div class="muted">${esc(t('noFirmwareText'))}</div></div>`;
+    renderFirmwareLinks(index, list);
   } catch (e) {
     firmwareLinks.innerHTML = `<div class="item"><b>${esc(t('firmwareLoadError'))}</b><div class="muted">${esc(e.message)}</div></div>`;
   }
+}
+
+function renderFirmwareLinks(routerIndex, list) {
+  firmwareLinks.innerHTML = list.length ? list.map(item => `
+      <div class="item firmware-item">
+        <div class="firmware-main">
+          <div><b>${esc(item.release)}</b><div class="muted">${esc(item.built_at || '')}</div></div>
+          <div><a href="${esc(item.url)}">${esc(item.name)}</a></div>
+          <div class="muted">${esc(item.sha256 || '')}</div>
+        </div>
+        <div class="firmware-actions">
+          <button class="danger" onclick="deleteFirmware(${routerIndex}, '${encodeURIComponent(item.release)}', '${encodeURIComponent(item.name)}')">${esc(t('deleteFirmware'))}</button>
+        </div>
+      </div>`).join('') : `<div class="item"><b>${esc(t('noFirmwareTitle'))}</b><div class="muted">${esc(t('noFirmwareText'))}</div></div>`;
 }
 
 async function deleteFirmware(routerIndex, encodedRelease, encodedName) {
@@ -2375,8 +2386,8 @@ async function deleteFirmware(routerIndex, encodedRelease, encodedName) {
   const name = decodeURIComponent(encodedName || '');
   if (!confirm(t('firmwareDeleteConfirm', {release, name}))) return;
   try {
-    await api('/api/router-firmware/' + encodeURIComponent(router.name) + '/' + encodeURIComponent(release), {method:'DELETE'});
-    await openFirmwareModal(routerIndex);
+    const report = await api('/api/router-firmware/' + encodeURIComponent(router.name) + '/' + encodeURIComponent(release), {method:'DELETE'});
+    renderFirmwareLinks(routerIndex, report.firmware || []);
     await load();
   } catch (e) {
     alert(t('firmwareDeleteFailed') + e.message);

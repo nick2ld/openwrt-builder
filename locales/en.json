@@ -60,6 +60,7 @@
   "build": "Build",
   "firmwares": "Firmware",
   "delete": "Delete",
+  "deleteFirmware": "Delete firmware",
   "editRouter": "Edit router",
   "editSource": "Edit APK source",
   "fieldsLoaded": "Fill fields",
