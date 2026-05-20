@@ -179,6 +179,30 @@ def http_text(url, timeout=None):
     return data.decode("utf-8", errors="replace")
 
 
+def http_url_exists(url, timeout=None):
+    if timeout is None:
+        timeout = HTTP_TIMEOUT
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "local-openwrt-builder/1.0"}, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 400
+    except urllib.error.HTTPError as exc:
+        if exc.code not in [403, 405]:
+            return False
+    except Exception:
+        return False
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "local-openwrt-builder/1.0", "Range": "bytes=0-0"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 400
+    except Exception:
+        return False
+
+
 def parse_links(index_html):
     return [html.unescape(m) for m in re.findall(r'href=["\']([^"\']+)["\']', index_html, flags=re.I)]
 
@@ -581,6 +605,36 @@ def github_release_assets(release_obj, log):
     return assets or (release_obj.get("assets", []) or [])
 
 
+def github_direct_release_apks(repo, release_obj, release, arch, target, subtarget, missing_packages, log):
+    tag = str(release_obj.get("tag_name") or f"v{release}")
+    if not tag:
+        return []
+    suffixes = []
+    if arch and target and subtarget:
+        suffixes.extend([
+            f"_v{release}_{arch}_{target}_{subtarget}.apk",
+            f"_{release}_{arch}_{target}_{subtarget}.apk",
+        ])
+    if arch:
+        suffixes.extend([
+            f"_v{release}_{arch}.apk",
+            f"_{release}_{arch}.apk",
+        ])
+    links = []
+    for package in missing_packages:
+        for suffix in suffixes:
+            filename = f"{package}{suffix}"
+            direct = (
+                f"https://github.com/{repo}/releases/download/"
+                f"{urllib.parse.quote(tag, safe='')}/{urllib.parse.quote(filename, safe='')}"
+            )
+            if http_url_exists(direct, timeout=10):
+                log(f"Found GitHub release APK by direct URL: {filename}")
+                links.append(direct)
+                break
+    return links
+
+
 def list_apks_from_github_releases(url, src, release, arch, target, subtarget, requested, log):
     repo = src.get("github_repo") or github_repo_from_url(url)
     if not repo:
@@ -593,11 +647,13 @@ def list_apks_from_github_releases(url, src, release, arch, target, subtarget, r
         return []
     wanted = release.lower().lstrip("v")
     assets = []
+    matched_releases = []
     for rel in releases:
         tag = str(rel.get("tag_name", "")).lower().lstrip("v")
         name = str(rel.get("name", "")).lower().lstrip("v")
         if wanted not in [tag, name] and not tag.startswith(wanted):
             continue
+        matched_releases.append(rel)
         assets.extend(github_release_assets(rel, log))
     if not assets and releases:
         assets = releases[0].get("assets", []) or []
@@ -616,6 +672,11 @@ def list_apks_from_github_releases(url, src, release, arch, target, subtarget, r
         if not package_requested(filename, requested):
             continue
         links.append(url)
+    if requested and matched_releases:
+        found = {package_name_from_apk(Path(urllib.parse.urlparse(link).path).name) for link in links}
+        missing = [package for package in requested if package not in found]
+        if missing:
+            links.extend(github_direct_release_apks(repo, matched_releases[0], release, arch, target, subtarget, missing, log))
     return links
 
 
