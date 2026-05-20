@@ -967,6 +967,49 @@ def firmware_history(router_name, limit=3):
     return items[:limit]
 
 
+def refresh_latest_firmware(router_name):
+    root = OUTPUT_DIR / router_name
+    latest_dir = root / "latest"
+    if latest_dir.exists() or latest_dir.is_symlink():
+        if latest_dir.is_symlink() or latest_dir.is_file():
+            latest_dir.unlink()
+        else:
+            shutil.rmtree(latest_dir)
+
+    history = firmware_history(router_name, 1)
+    if history:
+        source = root / history[0]["release"]
+        if source.exists():
+            shutil.copytree(source, latest_dir)
+
+
+def delete_router_firmware(router_name, release):
+    if not router_name or not release:
+        return {"status": "failed", "error": "missing router or release"}
+    root = (OUTPUT_DIR / router_name).resolve()
+    target = (OUTPUT_DIR / router_name / release).resolve()
+    if target == root or root not in target.parents or target.name == "latest":
+        return {"status": "failed", "error": "invalid firmware path"}
+    if not target.exists() or not target.is_dir():
+        return {"status": "failed", "error": "firmware not found"}
+
+    shutil.rmtree(target)
+    refresh_latest_firmware(router_name)
+
+    def mutate(st):
+        st["jobs"] = [
+            job for job in st.get("jobs", [])
+            if not (
+                job.get("router") == router_name
+                and str(job.get("release", "")) == str(release)
+                and job.get("status") in ["success", "skipped"]
+            )
+        ]
+        st["firmware_deleted_at"] = utc_now()
+    update_state(mutate)
+    return {"status": "ok", "router": router_name, "release": release, "firmware": firmware_history(router_name, 3)}
+
+
 def prune_router_firmware(router_name, keep=3):
     root = OUTPUT_DIR / router_name
     if not root.exists():
@@ -977,6 +1020,7 @@ def prune_router_firmware(router_name, keep=3):
             continue
         if child.is_dir() and child.name not in keep_releases:
             shutil.rmtree(child)
+    refresh_latest_firmware(router_name)
 
 
 def prune_jobs_state(keep_success_per_router=3):
@@ -2317,9 +2361,25 @@ async function openFirmwareModal(index) {
         <div><b>${esc(item.release)}</b><div class="muted">${esc(item.built_at || '')}</div></div>
         <div><a href="${esc(item.url)}">${esc(item.name)}</a></div>
         <div class="muted">${esc(item.sha256 || '')}</div>
+        <div class="row"><button class="danger" onclick="deleteFirmware(${index}, '${encodeURIComponent(item.release)}', '${encodeURIComponent(item.name)}')">${esc(t('delete'))}</button></div>
       </div>`).join('') : `<div class="item"><b>${esc(t('noFirmwareTitle'))}</b><div class="muted">${esc(t('noFirmwareText'))}</div></div>`;
   } catch (e) {
     firmwareLinks.innerHTML = `<div class="item"><b>${esc(t('firmwareLoadError'))}</b><div class="muted">${esc(e.message)}</div></div>`;
+  }
+}
+
+async function deleteFirmware(routerIndex, encodedRelease, encodedName) {
+  const router = (cfg.routers || [])[routerIndex];
+  if (!router) return;
+  const release = decodeURIComponent(encodedRelease);
+  const name = decodeURIComponent(encodedName || '');
+  if (!confirm(t('firmwareDeleteConfirm', {release, name}))) return;
+  try {
+    await api('/api/router-firmware/' + encodeURIComponent(router.name) + '/' + encodeURIComponent(release), {method:'DELETE'});
+    await openFirmwareModal(routerIndex);
+    await load();
+  } catch (e) {
+    alert(t('firmwareDeleteFailed') + e.message);
   }
 }
 
@@ -2958,6 +3018,21 @@ class Handler(BaseHTTPRequestHandler):
             }
             log_asu_exchange("POST", path, body, response, 202)
             self.send(202, response)
+        else:
+            self.send(404, {"error": "not found"})
+
+    def do_DELETE(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/api/router-firmware/"):
+            rest = path[len("/api/router-firmware/"):].strip("/")
+            parts = rest.split("/", 1)
+            if len(parts) != 2:
+                self.send(400, {"error": "missing router or release"})
+                return
+            router = urllib.parse.unquote(parts[0])
+            release = urllib.parse.unquote(parts[1])
+            result = delete_router_firmware(router, release)
+            self.send(200 if result.get("status") == "ok" else 400, result)
         else:
             self.send(404, {"error": "not found"})
 

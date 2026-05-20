@@ -71,6 +71,8 @@
   "noFirmwareTitle": "Прошивок пока нет",
   "noFirmwareText": "Успешные сборки появятся здесь автоматически.",
   "firmwareLoadError": "Не удалось загрузить список",
+  "firmwareDeleteConfirm": "Удалить прошивку {release} {name}? Файлы будут удалены с сервера.",
+  "firmwareDeleteFailed": "Не удалось удалить прошивку: ",
   "unsavedChanges": "Есть несохраненные изменения",
   "saving": "Сохраняю...",
   "saved": "Сохранено",

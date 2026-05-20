@@ -71,6 +71,8 @@
   "noFirmwareTitle": "No firmware yet",
   "noFirmwareText": "Successful builds will appear here automatically.",
   "firmwareLoadError": "Could not load list",
+  "firmwareDeleteConfirm": "Delete firmware {release} {name}? Files will be removed from the server.",
+  "firmwareDeleteFailed": "Could not delete firmware: ",
   "unsavedChanges": "Unsaved changes",
   "saving": "Saving...",
   "saved": "Saved",
