@@ -145,6 +145,17 @@ def read_log_response(file_path):
     return text
 
 
+def read_tail(path, max_bytes=12000):
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+            return fh.read().decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+
+
 def enriched_state():
     st = state()
     cfg = config()
@@ -454,9 +465,60 @@ def run_self_update():
             logfh.write(f"[{utc_now()}] Updater helper is still running in background\n")
 
     def mutate(st):
-        st["self_update"] = {"started_at": utc_now(), "log": "/logs/self-update.log"}
+        st["self_update"] = {"started_at": utc_now(), "status": "running", "log": "/logs/self-update.log"}
     update_state(mutate)
     return {"status": "started", "log": "/logs/self-update.log"}
+
+
+def self_update_status():
+    log_path = LOG_DIR / "self-update.log"
+    text = read_tail(log_path)
+    lower = text.lower()
+    current = read_text_file(APP_DIR / "COMMIT")
+    latest = state().get("latest_app_commit", "")
+    status = "idle"
+    progress = 0
+    title = "Update"
+    if "running self update" in lower or "starting openwrt-builder-self-update" in lower:
+        status = "running"
+        progress = 15
+        title = "Starting update"
+    if "downloading nick2ld/openwrt-builder@main" in lower or "downloading " in lower:
+        status = "running"
+        progress = 35
+        title = "Downloading update"
+    if "installing application into" in lower:
+        status = "running"
+        progress = 60
+        title = "Installing files"
+    if "starting openwrt-builder" in lower:
+        status = "running"
+        progress = 85
+        title = "Restarting service"
+    if "installed openwrt custom local builder" in lower or (latest and current and latest == current):
+        status = "success"
+        progress = 100
+        title = "Application updated"
+    if " error:" in lower or "failed" in lower:
+        status = "failed"
+        progress = 100
+        title = "Update failed"
+    info = {
+        "status": status,
+        "progress": progress,
+        "title": title,
+        "log": "/logs/self-update.log",
+        "last_line": "",
+        "current_commit": current,
+        "latest_commit": latest,
+        "current_short": current[:7] if current else "",
+        "latest_short": latest[:7] if latest else "",
+    }
+    for line in reversed(text.splitlines()):
+        if line.strip():
+            info["last_line"] = line.strip()
+            break
+    return info
 
 
 def sha256_file(path):
@@ -1446,6 +1508,94 @@ def firmware_history_response(router_name):
     return {"router": router_name, "firmware": firmware_history(router_name, 3)}
 
 
+def manifest_package_names(manifest):
+    names = set(split_packages(manifest.get("packages", [])))
+    for apk in manifest.get("external_apks", []):
+        name = package_name_from_apk(str(apk))
+        if name:
+            names.add(name)
+    return names
+
+
+def package_token_name(value):
+    text = str(value).strip().strip('"').strip("'")
+    if not text:
+        return ""
+    if "=" in text:
+        text = text.split("=", 1)[0]
+    if text.endswith(".apk"):
+        return package_name_from_apk(text)
+    return text
+
+
+def request_package_names(body):
+    packages = body.get("packages") or body.get("package_list") or body.get("installed_packages") or []
+    if isinstance(packages, dict):
+        packages = list(packages.keys())
+    return {name for name in (package_token_name(item) for item in split_packages(packages)) if name}
+
+
+def asu_router_for_request(body):
+    board = body.get("profile") or body.get("board") or body.get("id") or body.get("target")
+    target = body.get("target", "")
+    if "/" in str(target):
+        req_target, req_subtarget = str(target).split("/", 1)
+    else:
+        req_target, req_subtarget = str(target), str(body.get("subtarget", ""))
+    for item in config().get("routers", []):
+        if not item.get("enabled", True):
+            continue
+        if board and board not in [item.get("name"), item.get("profile")]:
+            continue
+        if req_target and req_target != item.get("target"):
+            continue
+        if req_subtarget and req_subtarget != item.get("subtarget"):
+            continue
+        return item
+    return None
+
+
+def asu_cached_job_for_request(body):
+    router = asu_router_for_request(body)
+    if not router:
+        return None
+    requested_version = str(body.get("version") or body.get("version_number") or "").strip()
+    latest_release = str(state().get("latest_release") or "").strip()
+    if not latest_release:
+        try:
+            latest_release = latest_openwrt_release(config().get("release_branch_prefix", "25."), timeout=10, allow_stale_cache=True)
+        except Exception:
+            latest_release = ""
+    candidates = []
+    for candidate in [latest_release, requested_version]:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    candidates.extend(item["release"] for item in firmware_history(router.get("name"), 3) if item["release"] not in candidates)
+    requested_packages = request_package_names(body)
+    for candidate in candidates:
+        manifest_path = firmware_manifest_path(router.get("name"), candidate)
+        if not manifest_path.exists():
+            continue
+        manifest = read_json(manifest_path, {})
+        if manifest.get("profile") != router.get("profile"):
+            continue
+        if manifest.get("target") != router.get("target") or manifest.get("subtarget") != router.get("subtarget"):
+            continue
+        if requested_packages and not requested_packages.issubset(manifest_package_names(manifest)):
+            continue
+        image = manifest.get("sysupgrade")
+        if not image or not (manifest_path.parent / image).exists():
+            continue
+        job_id = f"cached-{candidate}-{sanitize_job_part(router.get('name'))}-{int(time.time())}"
+        log_path = LOG_DIR / f"{job_id}.log"
+        append_job_log(log_path, f"Using cached firmware: /firmware/{router.get('name')}/{candidate}/{image}")
+        record_job(job_id, router.get("name"), candidate, "success", log_path, {
+            "output": f"/firmware/{router.get('name')}/{candidate}/{image}",
+        })
+        return {"status": "cached", "id": job_id, "log": f"/logs/{log_path.name}"}
+    return None
+
+
 def asu_latest():
     overview = asu_overview()
     return {"latest": overview.get("latest", [])}
@@ -1609,6 +1759,11 @@ INDEX_HTML = r"""<!doctype html>
     .job-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .progress { height: 8px; border-radius: 999px; background: #edf1f7; overflow: hidden; }
     .progress > span { display: block; height: 100%; width: 0; background: var(--primary); transition: width .2s ease; }
+    .progress.large { height: 12px; }
+    .spinner { width: 34px; height: 34px; border: 4px solid #d2e3fc; border-top-color: var(--primary); border-radius: 50%; animation: spin .85s linear infinite; }
+    .checkmark { width: 44px; height: 44px; border-radius: 50%; background: #e6f4ea; color: var(--success); display: grid; place-items: center; font-size: 28px; font-weight: 800; animation: pop .28s ease-out; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pop { 0% { transform: scale(.55); opacity: .2; } 100% { transform: scale(1); opacity: 1; } }
     .last-line { font-family: "Roboto Mono", ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; }
     pre { white-space: pre-wrap; background: #202124; color: #e8eaed; padding: 14px; border-radius: 8px; max-height: 64vh; overflow: auto; }
@@ -1758,6 +1913,28 @@ INDEX_HTML = r"""<!doctype html>
     <div id="firmwareLinks"></div>
   </div>
 </div>
+<div id="updateModal" class="modal-backdrop">
+  <div class="modal log-modal">
+    <div class="modal-head">
+      <h2 id="updateModalTitle">Обновление приложения</h2>
+      <button class="secondary" id="updateOkButton" onclick="finishUpdateModal()" style="display:none">OK</button>
+    </div>
+    <div class="item">
+      <div class="row">
+        <div id="updateIcon" class="spinner"></div>
+        <div>
+          <b id="updateStatusTitle">Запускаю обновление...</b>
+          <div id="updateLastLine" class="muted"></div>
+        </div>
+      </div>
+      <div class="progress large"><span id="updateProgress"></span></div>
+      <div class="row">
+        <button class="secondary" onclick="toggleUpdateLog()" data-i18n="viewLog">Просмотреть лог</button>
+      </div>
+      <pre id="updateLog" style="display:none"></pre>
+    </div>
+  </div>
+</div>
 <div id="logModal" class="modal-backdrop">
   <div class="modal log-modal">
     <div class="modal-head">
@@ -1786,6 +1963,7 @@ let routerStatusCache = {};
 let messages = {};
 let currentLang = localStorage.getItem('owb_language') || ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
 let logAutoScroll = true;
+let updatePollTimer = null;
 
 function t(key, params = {}) {
   let text = messages[key] || key;
@@ -2281,19 +2459,77 @@ async function checkVersion() {
 }
 
 async function runUpdate() {
-  versionStatus.textContent = t('startingUpdate');
+  openUpdateModal();
   try {
     const result = await api('/api/update', {method:'POST'});
     versionStatus.textContent = t('updateStarted');
-    if (result.log) viewLog(result.log, t('updateLogTitle'));
+    pollUpdateStatus();
   } catch (e) {
+    updateModalTitle.textContent = t('updateFailed');
+    updateStatusTitle.textContent = t('updateFailed') + e.message;
+    updateIcon.className = 'checkmark';
+    updateIcon.textContent = '!';
+    updateOkButton.style.display = '';
     if (String(e.message || '').includes('Failed to fetch')) {
       versionStatus.textContent = t('updateConnectionLost');
     } else {
       versionStatus.textContent = t('updateFailed') + e.message;
     }
-    viewLog('/logs/self-update.log', t('updateLogTitle'));
   }
+}
+
+function openUpdateModal() {
+  updateModal.classList.add('open');
+  updateModalTitle.textContent = t('updateLogTitle');
+  updateStatusTitle.textContent = t('startingUpdate');
+  updateLastLine.textContent = '';
+  updateProgress.style.width = '5%';
+  updateIcon.className = 'spinner';
+  updateIcon.textContent = '';
+  updateOkButton.style.display = 'none';
+  updateLog.style.display = 'none';
+  updateLog.textContent = '';
+}
+
+function finishUpdateModal() {
+  location.reload();
+}
+
+function toggleUpdateLog() {
+  updateLog.style.display = updateLog.style.display === 'none' ? '' : 'none';
+}
+
+async function pollUpdateStatus() {
+  clearTimeout(updatePollTimer);
+  try {
+    const status = await api('/api/update-status');
+    updateStatusTitle.textContent = status.title || t('startingUpdate');
+    updateLastLine.textContent = status.last_line || '';
+    updateProgress.style.width = `${Math.max(0, Math.min(100, Number(status.progress || 0)))}%`;
+    try {
+      const res = await fetch(status.log || '/logs/self-update.log', {cache: 'no-store'});
+      updateLog.textContent = await res.text();
+      if (updateLog.style.display !== 'none') updateLog.scrollTop = updateLog.scrollHeight;
+    } catch (_) {}
+    if (status.status === 'success') {
+      updateIcon.className = 'checkmark';
+      updateIcon.textContent = '✓';
+      updateStatusTitle.textContent = t('updateComplete');
+      updateOkButton.style.display = '';
+      checkVersion();
+      return;
+    }
+    if (status.status === 'failed') {
+      updateIcon.className = 'checkmark';
+      updateIcon.textContent = '!';
+      updateStatusTitle.textContent = t('updateFailed');
+      updateOkButton.style.display = '';
+      return;
+    }
+  } catch (e) {
+    updateLastLine.textContent = e.message;
+  }
+  updatePollTimer = setTimeout(pollUpdateStatus, 1500);
 }
 
 async function cleanupJobs() {
@@ -2313,9 +2549,13 @@ function renderJob(job, index) {
   const canCancel = ['queued','running','downloading','checking','building','publishing','waiting_apks'].includes(job.status);
   const cancel = canCancel ? `<button class="danger" onclick="cancelJob(${index})">${esc(t('stop'))}</button>` : '';
   const finalLine = job.status === 'success' && job.output ? `${t('ready')}: ${job.output}` : (job.last_line || t('emptyLog'));
+  const active = canCancel && job.status !== 'waiting_apks';
+  const icon = job.status === 'success'
+    ? '<span class="checkmark" style="width:28px;height:28px;font-size:18px">✓</span>'
+    : (active ? '<span class="spinner" style="width:24px;height:24px;border-width:3px"></span>' : '');
   return `<div class="item">
     <div class="job-head">
-      <div><b>${esc(job.router)} ${esc(job.release)}</b><div class="muted">${esc(job.updated_at || '')}</div></div>
+      <div class="row">${icon}<div><b>${esc(job.router)} ${esc(job.release)}</b><div class="muted">${esc(job.updated_at || '')}</div></div></div>
       <span class="pill">${esc(job.status)}</span>
     </div>
     <div class="progress"><span style="width:${progress}%"></span></div>
@@ -2420,6 +2660,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, firmware_history_response(router))
         elif path == "/api/version":
             self.send(200, version_status())
+        elif path == "/api/update-status":
+            self.send(200, self_update_status())
         elif path == "/api/devices":
             params = urllib.parse.parse_qs(parsed.query)
             query = params.get("q", [""])[0]
@@ -2519,13 +2761,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, cancel_job(job_id))
         elif path in ["/api/v1/build", "/api/asu/api/v1/build", "/api/build-request"]:
             body = self.read_body()
-            board = body.get("profile") or body.get("board") or body.get("target")
-            router = None
-            for item in config().get("routers", []):
-                if board in [item.get("name"), item.get("profile")]:
-                    router = item.get("name")
-                    break
-            queued = enqueue_manual_build(router_name=router, force=True)
+            cached = asu_cached_job_for_request(body)
+            if cached:
+                self.send(202, {
+                    "status": "queued",
+                    "request_hash": cached.get("id"),
+                    "imagebuilder_status": "done",
+                    "queue_position": 0,
+                    "detail": "Using cached local firmware image.",
+                })
+                return
+            router_item = asu_router_for_request(body)
+            router = router_item.get("name") if router_item else None
+            queued = enqueue_manual_build(router_name=router, force=False)
             self.send(202, {
                 "status": "queued",
                 "request_hash": queued.get("id"),

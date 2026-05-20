@@ -92,6 +92,8 @@
   "startingUpdate": "Starting update...",
   "updateStarted": "Update started. The service will restart; refresh the page in 10-20 seconds.",
   "updateLogTitle": "Application update",
+  "updateComplete": "Application updated",
+  "viewLog": "View log",
   "updateConnectionLost": "Connection was interrupted: the service is probably restarting. Refresh the page in 10-20 seconds.",
   "updateFailed": "Update did not start: ",
   "cleanupConfirm": "Clean old jobs, logs, downloaded APKs, and ImageBuilder directories? Ready firmware files will stay.",
