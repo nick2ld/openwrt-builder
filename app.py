@@ -40,6 +40,10 @@ ACTIVE_JOBS = {}
 ACTIVE_JOBS_LOCK = threading.Lock()
 CANCELLED_JOBS = set()
 
+
+class OversizedFirmwareError(RuntimeError):
+    pass
+
 DEFAULT_CONFIG = {
     "listen_host": "0.0.0.0",
     "listen_port": 8088,
@@ -1080,22 +1084,32 @@ def prune_jobs_state(keep_success_per_router=3):
     def mutate(current):
         kept = []
         success_count = {}
+        terminal_count = {}
         for job in current.get("jobs", []):
             status = job.get("status")
             router = job.get("router") or ""
-            if status in ["failed", "cancelled"]:
-                log_name = Path(str(job.get("log", ""))).name
-                if log_name:
-                    try:
-                        (LOG_DIR / log_name).unlink()
-                    except FileNotFoundError:
-                        pass
-                continue
             if status == "success":
                 count = success_count.get(router, 0)
                 if count >= keep_success_per_router:
+                    log_name = Path(str(job.get("log", ""))).name
+                    if log_name:
+                        try:
+                            (LOG_DIR / log_name).unlink()
+                        except FileNotFoundError:
+                            pass
                     continue
                 success_count[router] = count + 1
+            elif status in ["failed", "cancelled"]:
+                count = terminal_count.get(router, 0)
+                if count >= 5:
+                    log_name = Path(str(job.get("log", ""))).name
+                    if log_name:
+                        try:
+                            (LOG_DIR / log_name).unlink()
+                        except FileNotFoundError:
+                            pass
+                    continue
+                terminal_count[router] = count + 1
             kept.append(job)
         current["jobs"] = kept[:100]
     update_state(mutate)
@@ -1123,6 +1137,7 @@ def router_statuses(cfg=None, st=None):
         jobs = [j for j in st.get("jobs", []) if j.get("router") in [name, "all"]]
         active = next((j for j in jobs if j.get("status") in active_statuses), None)
         waiting = next((j for j in jobs if j.get("status") == "waiting_apks"), None)
+        failed = next((j for j in jobs if j.get("status") == "failed"), None)
         success = next((j for j in jobs if j.get("status") == "success"), None)
         if active:
             statuses[name] = {
@@ -1138,6 +1153,14 @@ def router_statuses(cfg=None, st=None):
                 "label": "Нет APK",
                 "tooltip": waiting.get("error") or waiting.get("last_line") or "Нет необходимых APK",
                 "job": waiting.get("id"),
+                "firmware": history,
+            }
+        elif failed:
+            statuses[name] = {
+                "state": "failed",
+                "label": "Ошибка сборки",
+                "tooltip": failed.get("error") or failed.get("last_line") or "Сборка завершилась с ошибкой",
+                "job": failed.get("id"),
                 "firmware": history,
             }
         elif latest and firmware_manifest_path(name, latest).exists():
@@ -1196,6 +1219,46 @@ def active_job_for_router(router_name):
         (
             j for j in state().get("jobs", [])
             if j.get("router") == router_name and j.get("status") in active
+        ),
+        None,
+    )
+
+
+def build_input_key(cfg, router):
+    sources = []
+    for src in cfg.get("package_sources", []):
+        if not src.get("enabled", True):
+            continue
+        if not source_applies_to_router(src, router):
+            continue
+        sources.append({
+            "name": src.get("name", ""),
+            "url": src.get("url", ""),
+            "arch": src.get("arch", ""),
+            "packages": split_packages(src.get("packages", "")),
+            "regex": src.get("regex", ""),
+            "router": src.get("router", ""),
+        })
+    payload = {
+        "profile": router.get("profile", ""),
+        "target": router.get("target", ""),
+        "subtarget": router.get("subtarget", ""),
+        "arch": router.get("arch", ""),
+        "packages": split_packages(router.get("packages", "")),
+        "sources": sorted(sources, key=lambda item: json.dumps(item, sort_keys=True)),
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def oversized_failure_for(router_name, release, build_key):
+    return next(
+        (
+            j for j in state().get("jobs", [])
+            if j.get("router") == router_name
+            and str(j.get("release", "")) == str(release)
+            and j.get("status") == "failed"
+            and j.get("error_type") == "image_too_big"
+            and j.get("build_key") == build_key
         ),
         None,
     )
@@ -1443,6 +1506,7 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
         name = router["name"]
         job_id = job_id_override or f"{int(time.time())}-{sanitize_job_part(name)}"
         log_path = log_path_override or LOG_DIR / f"{job_id}.log"
+        build_key = build_input_key(cfg, router)
 
         def log(msg):
             line = f"[{utc_now()}] {msg}\n"
@@ -1451,7 +1515,10 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
             print(line, end="", flush=True)
 
         def set_job(status, extra=None):
-            record_job(job_id, name, release, status, log_path, extra)
+            payload = {"build_key": build_key}
+            if extra:
+                payload.update(extra)
+            record_job(job_id, name, release, status, log_path, payload)
 
         if is_job_cancelled(job_id):
             log("Build cancelled before start")
@@ -1460,6 +1527,13 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
         set_job("running")
         try:
             profile = router["profile"]
+            if not force:
+                oversized = oversized_failure_for(name, release, build_key)
+                if oversized:
+                    message = oversized.get("error") or "Previous oversized firmware build failed with the same package set"
+                    log("Skipping build: previous oversized firmware failure with the same package set")
+                    set_job("failed", {"error": message, "error_type": "image_too_big", "blocked_by": oversized.get("id", "")})
+                    continue
             built_marker = firmware_manifest_path(name, release)
             if built_marker.exists() and not force:
                 log("Firmware already exists; skipping")
@@ -1506,7 +1580,7 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
                 continue
             too_big_error = image_too_big_error(log_path)
             if too_big_error:
-                raise RuntimeError(too_big_error)
+                raise OversizedFirmwareError(too_big_error)
             if return_code != 0:
                 raise RuntimeError(f"ImageBuilder failed with exit code {return_code}")
             image = find_sysupgrade_image(builder / "bin", profile)
@@ -1545,7 +1619,10 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
             prune_jobs_state()
         except Exception as exc:
             log(f"ERROR: {exc}")
-            set_job("failed", {"error": str(exc)})
+            extra = {"error": str(exc)}
+            if isinstance(exc, OversizedFirmwareError):
+                extra["error_type"] = "image_too_big"
+            set_job("failed", extra)
             prune_jobs_state()
 
 
@@ -1567,6 +1644,9 @@ def check_and_build(force=False, router_name=None):
         if not name:
             continue
         if not force and firmware_manifest_path(name, release).exists():
+            continue
+        build_key = build_input_key(cfg, router)
+        if not force and oversized_failure_for(name, release, build_key):
             continue
         report = external_apk_report(cfg, release, router)
         if not report.get("ready", True):
@@ -2280,6 +2360,7 @@ function routerStatusLabel(status, fallback) {
     missing_apks: 'routerStatusMissingApks',
     building: 'routerStatusBuilding',
     success: 'routerStatusSuccess',
+    failed: 'routerStatusFailed',
     queued: 'routerStatusQueued',
     idle: 'routerStatusIdle',
     unknown: 'routerStatusUnknown'
@@ -3135,6 +3216,23 @@ class Handler(BaseHTTPRequestHandler):
             router_item = asu_router_for_request(body)
             router = router_item.get("name") if router_item else None
             request_hash = str(body.get("request_hash") or "").strip()
+            if router_item:
+                try:
+                    release = latest_openwrt_release(config().get("release_branch_prefix", "25."), timeout=10, allow_stale_cache=True)
+                except Exception:
+                    release = state().get("latest_release") or body.get("version") or ""
+                blocked = oversized_failure_for(router_item.get("name"), release, build_input_key(config(), router_item))
+                if blocked:
+                    response = {
+                        "status": "failed",
+                        "request_hash": blocked.get("id") or request_hash,
+                        "imagebuilder_status": "failed",
+                        "queue_position": 0,
+                        "detail": blocked.get("error") or "Firmware image is too big for this router. Remove packages and rebuild.",
+                    }
+                    log_asu_exchange("POST", path, body, response, 500)
+                    self.send(500, response)
+                    return
             queued = enqueue_manual_build(
                 router_name=router,
                 force=False,

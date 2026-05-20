@@ -120,6 +120,7 @@
   "routerStatusMissingApks": "Нет необходимых APK",
   "routerStatusBuilding": "Собирается",
   "routerStatusSuccess": "Успешно собрано",
+  "routerStatusFailed": "Ошибка сборки",
   "routerStatusQueued": "В очереди",
   "routerStatusIdle": "Не собиралось",
   "routerStatusUnknown": "Неизвестно"

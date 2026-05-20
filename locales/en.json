@@ -120,6 +120,7 @@
   "routerStatusMissingApks": "Required APK missing",
   "routerStatusBuilding": "Building",
   "routerStatusSuccess": "Built successfully",
+  "routerStatusFailed": "Build failed",
   "routerStatusQueued": "Queued",
   "routerStatusIdle": "Not built yet",
   "routerStatusUnknown": "Unknown"
