@@ -176,6 +176,7 @@ echo "[\$(date -Is)] starting \$UNIT" >>"${DATA_DIR}/logs/self-update.log"
 exec systemd-run \
   --unit="\$UNIT" \
   --collect \
+  --no-block \
   --property=Type=oneshot \
   --property=WorkingDirectory=/tmp \
   --property=StandardOutput=append:${DATA_DIR}/logs/self-update.log \

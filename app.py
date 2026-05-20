@@ -434,18 +434,24 @@ def version_status():
 
 def run_self_update():
     log_path = LOG_DIR / "self-update.log"
-    cmd = ["sudo", "/usr/local/sbin/openwrt-builder-update"]
+    cmd = ["sudo", "-n", "/usr/local/sbin/openwrt-builder-update"]
     with log_path.open("a", encoding="utf-8") as logfh:
         logfh.write(f"[{utc_now()}] Running self update\n")
         logfh.flush()
         try:
-            proc = subprocess.run(cmd, stdout=logfh, stderr=subprocess.STDOUT, timeout=20)
-        except subprocess.TimeoutExpired as exc:
-            logfh.write(f"[{utc_now()}] ERROR: updater helper timed out while starting: {exc}\n")
-            raise RuntimeError("updater helper timed out while starting")
-        if proc.returncode != 0:
+            proc = subprocess.Popen(cmd, stdout=logfh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        except Exception as exc:
+            logfh.write(f"[{utc_now()}] ERROR: updater helper could not start: {exc}\n")
+            raise RuntimeError(f"updater helper could not start: {exc}")
+        for _ in range(10):
+            if proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        if proc.poll() is not None and proc.returncode != 0:
             logfh.write(f"[{utc_now()}] ERROR: updater helper failed with exit code {proc.returncode}\n")
             raise RuntimeError(f"updater helper failed with exit code {proc.returncode}")
+        if proc.poll() is None:
+            logfh.write(f"[{utc_now()}] Updater helper is still running in background\n")
 
     def mutate(st):
         st["self_update"] = {"started_at": utc_now(), "log": "/logs/self-update.log"}
