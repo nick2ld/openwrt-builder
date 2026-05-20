@@ -450,19 +450,30 @@ def run_self_update():
         logfh.write(f"[{utc_now()}] Running self update\n")
         logfh.flush()
         try:
-            proc = subprocess.Popen(cmd, stdout=logfh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=8,
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = (exc.stdout or "") + (exc.stderr or "")
+            if output:
+                logfh.write(output)
+            logfh.write(f"[{utc_now()}] Updater helper is still running in background\n")
         except Exception as exc:
             logfh.write(f"[{utc_now()}] ERROR: updater helper could not start: {exc}\n")
             raise RuntimeError(f"updater helper could not start: {exc}")
-        for _ in range(10):
-            if proc.poll() is not None:
-                break
-            time.sleep(0.2)
-        if proc.poll() is not None and proc.returncode != 0:
-            logfh.write(f"[{utc_now()}] ERROR: updater helper failed with exit code {proc.returncode}\n")
-            raise RuntimeError(f"updater helper failed with exit code {proc.returncode}")
-        if proc.poll() is None:
-            logfh.write(f"[{utc_now()}] Updater helper is still running in background\n")
+        else:
+            output = proc.stdout or ""
+            if output:
+                logfh.write(output)
+            if proc.returncode != 0 and "Running as unit:" not in output:
+                logfh.write(f"[{utc_now()}] ERROR: updater helper failed with exit code {proc.returncode}\n")
+                raise RuntimeError((output.strip() or f"updater helper failed with exit code {proc.returncode}"))
+            logfh.write(f"[{utc_now()}] Updater helper accepted by systemd\n")
 
     def mutate(st):
         st["self_update"] = {"started_at": utc_now(), "status": "running", "log": "/logs/self-update.log"}
@@ -2479,6 +2490,11 @@ async function runUpdate() {
     versionStatus.textContent = t('updateStarted');
     pollUpdateStatus();
   } catch (e) {
+    if (String(e.message || '').includes('Running as unit:')) {
+      versionStatus.textContent = t('updateStarted');
+      pollUpdateStatus();
+      return;
+    }
     updateModalTitle.textContent = t('updateFailed');
     updateStatusTitle.textContent = t('updateFailed') + e.message;
     updateIcon.className = 'checkmark';
