@@ -35,6 +35,7 @@ HTTP_TIMEOUT = int(os.environ.get("OWB_HTTP_TIMEOUT", "20"))
 VERSION_CHECK_TIMEOUT = int(os.environ.get("OWB_VERSION_CHECK_TIMEOUT", "30"))
 BUILD_LOCK = threading.Lock()
 ENQUEUE_LOCK = threading.Lock()
+STATE_LOCK = threading.RLock()
 ACTIVE_JOBS = {}
 ACTIVE_JOBS_LOCK = threading.Lock()
 CANCELLED_JOBS = set()
@@ -102,7 +103,8 @@ def config():
 
 
 def state():
-    return read_json(STATE_PATH, {"last_check": None, "latest_release": None, "jobs": []})
+    with STATE_LOCK:
+        return read_json(STATE_PATH, {"last_check": None, "latest_release": None, "jobs": []})
 
 
 def job_progress(status):
@@ -178,10 +180,11 @@ def enriched_state():
 
 
 def update_state(mutator):
-    current = state()
-    mutator(current)
-    write_json(STATE_PATH, current)
-    return current
+    with STATE_LOCK:
+        current = read_json(STATE_PATH, {"last_check": None, "latest_release": None, "jobs": []})
+        mutator(current)
+        write_json(STATE_PATH, current)
+        return current
 
 
 def http_get(url, timeout=None):
@@ -1074,28 +1077,26 @@ def prune_router_firmware(router_name, keep=3):
 
 
 def prune_jobs_state(keep_success_per_router=3):
-    st = state()
-    kept = []
-    success_count = {}
-    for job in st.get("jobs", []):
-        status = job.get("status")
-        router = job.get("router") or ""
-        if status in ["failed", "cancelled"]:
-            log_name = Path(str(job.get("log", ""))).name
-            if log_name:
-                try:
-                    (LOG_DIR / log_name).unlink()
-                except FileNotFoundError:
-                    pass
-            continue
-        if status == "success":
-            count = success_count.get(router, 0)
-            if count >= keep_success_per_router:
-                continue
-            success_count[router] = count + 1
-        kept.append(job)
-
     def mutate(current):
+        kept = []
+        success_count = {}
+        for job in current.get("jobs", []):
+            status = job.get("status")
+            router = job.get("router") or ""
+            if status in ["failed", "cancelled"]:
+                log_name = Path(str(job.get("log", ""))).name
+                if log_name:
+                    try:
+                        (LOG_DIR / log_name).unlink()
+                    except FileNotFoundError:
+                        pass
+                continue
+            if status == "success":
+                count = success_count.get(router, 0)
+                if count >= keep_success_per_router:
+                    continue
+                success_count[router] = count + 1
+            kept.append(job)
         current["jobs"] = kept[:100]
     update_state(mutate)
 
