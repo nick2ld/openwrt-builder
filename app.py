@@ -1375,15 +1375,14 @@ def enqueue_manual_build(router_name=None, force=True, job_id_override=None, que
                     "log": existing.get("log", ""),
                     "existing": True,
                 }
-        if not force:
-            existing = active_job_for_router(name)
-            if existing:
-                return {
-                    "status": existing.get("status", "queued"),
-                    "id": existing.get("id"),
-                    "log": existing.get("log", ""),
-                    "existing": True,
-                }
+        existing = active_job_for_router(name)
+        if existing:
+            return {
+                "status": existing.get("status", "queued"),
+                "id": existing.get("id"),
+                "log": existing.get("log", ""),
+                "existing": True,
+            }
 
         job_id = job_id_override or f"{int(time.time())}-manual-{sanitize_job_part(name)}"
         log_path = LOG_DIR / f"{sanitize_job_part(job_id)}.log"
@@ -2755,7 +2754,7 @@ async function buildNow(router) {
   await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
   const result = await api('/api/build', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({router, force:true})});
   await load();
-  if (result.log) viewLog(result.log, t('buildStarted'));
+  if (result.log) viewLog(result.log, result.existing ? t('buildAlreadyRunning') : t('buildStarted'));
 }
 
 async function buildAllAvailable() {
@@ -2763,7 +2762,7 @@ async function buildAllAvailable() {
   await api('/api/config', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(cfg)});
   const result = await api('/api/build', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({force:false})});
   await load();
-  if (result.log) viewLog(result.log, t('buildStarted'));
+  if (result.log) viewLog(result.log, result.existing ? t('buildAlreadyRunning') : t('buildStarted'));
 }
 
 async function scanRepos() {

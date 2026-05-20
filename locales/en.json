@@ -79,6 +79,7 @@
   "saved": "Saved",
   "saveError": "Save error: ",
   "buildStarted": "Build started",
+  "buildAlreadyRunning": "Build already running",
   "checking": "Checking...",
   "apkFound": "APK found",
   "waitingApk": "Waiting for APK",

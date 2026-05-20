@@ -79,6 +79,7 @@
   "saved": "Сохранено",
   "saveError": "Ошибка сохранения: ",
   "buildStarted": "Запуск сборки",
+  "buildAlreadyRunning": "Сборка уже запущена",
   "checking": "Проверяю...",
   "apkFound": "APK найдены",
   "waitingApk": "Ожидание APK",

@@ -2,6 +2,12 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.3] - 2026-05-21
+
+### Fixed
+- Manual router builds no longer create a second active job when the same router is already building.
+- The build log modal now shows that an existing build was reused instead of opening a duplicate queued job.
+
 ## [0.2.2] - 2026-05-21
 
 ### Fixed
