@@ -81,6 +81,12 @@ def write_json(path, value):
     tmp.replace(path)
 
 
+def append_jsonl(path, item):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
 def read_text_file(path):
     try:
         return path.read_text(encoding="utf-8").strip()
@@ -1519,6 +1525,62 @@ def firmware_history_response(router_name):
     return {"router": router_name, "firmware": firmware_history(router_name, 3)}
 
 
+def asu_request_log_path():
+    return LOG_DIR / "asu-requests.jsonl"
+
+
+def compact_payload(value, limit=5000):
+    try:
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(value)
+    if len(text) > limit:
+        return text[:limit] + "\n... truncated ..."
+    return text
+
+
+def asu_log_summary(method, path, request_body, response_body, status):
+    request_body = request_body or {}
+    response_body = response_body if isinstance(response_body, dict) else {}
+    system_board = request_body.get("system_board") or {}
+    release = system_board.get("release") or {}
+    return {
+        "time": utc_now(),
+        "method": method,
+        "path": path,
+        "client": request_body.get("client", ""),
+        "router": system_board.get("model") or request_body.get("profile") or request_body.get("board") or "",
+        "profile": request_body.get("profile") or request_body.get("board") or response_body.get("id") or "",
+        "target": request_body.get("target") or release.get("target") or response_body.get("target") or "",
+        "version": request_body.get("version") or release.get("version") or response_body.get("version_number") or "",
+        "request_hash": request_body.get("request_hash") or response_body.get("request_hash") or "",
+        "response_status": status,
+        "response_detail": response_body.get("detail") or response_body.get("imagebuilder_status") or response_body.get("status") or "",
+        "request": compact_payload(request_body),
+        "response": compact_payload(response_body),
+    }
+
+
+def log_asu_exchange(method, path, request_body, response_body, status):
+    append_jsonl(asu_request_log_path(), asu_log_summary(method, path, request_body, response_body, status))
+
+
+def asu_request_log(limit=80):
+    path = asu_request_log_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return {"items": []}
+    items = []
+    for line in lines[-limit:]:
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    items.reverse()
+    return {"items": items}
+
+
 def manifest_package_names(manifest):
     names = set(split_packages(manifest.get("packages", [])))
     for apk in manifest.get("external_apks", []):
@@ -1871,6 +1933,13 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div id="jobs"></div>
   </section>
+  <section>
+    <div class="section-head">
+      <h2 data-i18n="routerRequests">Запросы роутера</h2>
+      <button class="secondary" onclick="loadAsuRequests()" data-i18n="refresh">Обновить</button>
+    </div>
+    <div id="asuRequests"></div>
+  </section>
 </main>
 <footer>
   <div class="footer-bar">
@@ -1973,6 +2042,18 @@ INDEX_HTML = r"""<!doctype html>
     <pre id="mainLog"></pre>
   </div>
 </div>
+<div id="asuRequestModal" class="modal-backdrop">
+  <div class="modal log-modal">
+    <div class="modal-head">
+      <h2 id="asuRequestTitle">Запрос роутера</h2>
+      <button class="secondary" onclick="closeAsuRequestModal()" data-i18n="close">Закрыть</button>
+    </div>
+    <div class="grid">
+      <label>Request <textarea id="asuRequestBody" spellcheck="false"></textarea></label>
+      <label>Response <textarea id="asuResponseBody" spellcheck="false"></textarea></label>
+    </div>
+  </div>
+</div>
 <script>
 let cfg = {};
 let searchTimer = null;
@@ -1989,6 +2070,7 @@ let messages = {};
 let currentLang = localStorage.getItem('owb_language') || ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
 let logAutoScroll = true;
 let updatePollTimer = null;
+let asuRequestCache = [];
 
 function t(key, params = {}) {
   let text = messages[key] || key;
@@ -2595,6 +2677,53 @@ function renderJob(job, index) {
   </div>`;
 }
 
+function renderAsuRequests() {
+  if (!asuRequestCache.length) {
+    asuRequests.innerHTML = `<div class="item"><b>${esc(t('noRouterRequests'))}</b><div class="muted">${esc(t('noRouterRequestsText'))}</div></div>`;
+    return;
+  }
+  asuRequests.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>${esc(t('time'))}</th><th>${esc(t('request'))}</th><th>${esc(t('router'))}</th><th>${esc(t('profile'))}</th><th>${esc(t('status'))}</th><th></th></tr></thead>
+        <tbody>
+          ${asuRequestCache.map((item, i) => `
+            <tr>
+              <td>${esc(item.time || '')}</td>
+              <td><b>${esc(item.method || '')}</b> ${esc(item.path || '')}<div class="muted">${esc(item.request_hash || '')}</div></td>
+              <td>${esc(item.router || '')}<div class="muted">${esc(item.target || '')} ${esc(item.version || '')}</div></td>
+              <td>${esc(item.profile || '')}</td>
+              <td><span class="pill">${esc(item.response_status || '')}</span><div class="muted">${esc(item.response_detail || '')}</div></td>
+              <td><button class="secondary" onclick="openAsuRequest(${i})">${esc(t('details'))}</button></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function loadAsuRequests() {
+  try {
+    const data = await api('/api/asu-log');
+    asuRequestCache = data.items || [];
+    renderAsuRequests();
+  } catch (e) {
+    asuRequests.innerHTML = `<div class="item"><b>${esc(t('routerRequestsLoadError'))}</b><div class="muted">${esc(e.message)}</div></div>`;
+  }
+}
+
+function openAsuRequest(index) {
+  const item = asuRequestCache[index];
+  if (!item) return;
+  asuRequestTitle.textContent = `${item.method || ''} ${item.path || ''}`;
+  asuRequestBody.value = item.request || '';
+  asuResponseBody.value = item.response || '';
+  asuRequestModal.classList.add('open');
+}
+
+function closeAsuRequestModal() {
+  asuRequestModal.classList.remove('open');
+}
+
 async function cancelJob(index) {
   const job = jobCache[index];
   if (!job || !job.id) return;
@@ -2615,6 +2744,7 @@ async function load() {
     refreshSelectedLog();
   }
   if (!dirty) bindConfig();
+  loadAsuRequests();
 }
 loadLocale(currentLang).then(() => {
   load();
@@ -2692,6 +2822,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, version_status())
         elif path == "/api/update-status":
             self.send(200, self_update_status())
+        elif path == "/api/asu-log":
+            self.send(200, asu_request_log())
         elif path == "/api/devices":
             params = urllib.parse.parse_qs(parsed.query)
             query = params.get("q", [""])[0]
@@ -2710,21 +2842,32 @@ class Handler(BaseHTTPRequestHandler):
             "/api/asu/json/v1/overview.json",
             "/api/asu/api/v1/overview",
         ]:
-            self.send(200, asu_overview())
+            body = asu_overview()
+            log_asu_exchange("GET", path, {}, body, 200)
+            self.send(200, body)
         elif path in ["/json/v1/latest.json", "/api/asu/json/v1/latest.json", "/api/v1/latest"]:
-            self.send(200, asu_latest())
+            body = asu_latest()
+            log_asu_exchange("GET", path, {}, body, 200)
+            self.send(200, body)
         elif path in ["/json/v1/branches.json", "/api/asu/json/v1/branches.json"]:
-            self.send(200, asu_branches())
+            body = asu_branches()
+            log_asu_exchange("GET", path, {}, body, 200)
+            self.send(200, body)
         elif path.startswith("/api/v1/revision/") or path.startswith("/api/asu/api/v1/revision/"):
             prefix = "/api/asu/api/v1/revision/" if path.startswith("/api/asu/") else "/api/v1/revision/"
             parts = path[len(prefix):].split("/")
             if len(parts) >= 3:
-                self.send(200, asu_revision(parts[0], parts[1], "/".join(parts[2:])))
+                body = asu_revision(parts[0], parts[1], "/".join(parts[2:]))
+                log_asu_exchange("GET", path, {}, body, 200)
+                self.send(200, body)
             else:
-                self.send(400, {"error": "bad revision path"})
+                body = {"error": "bad revision path"}
+                log_asu_exchange("GET", path, {}, body, 400)
+                self.send(400, body)
         elif path.startswith("/api/v1/build/") or path.startswith("/api/asu/api/v1/build/"):
             prefix = "/api/asu/api/v1/build/" if path.startswith("/api/asu/") else "/api/v1/build/"
             body, status = asu_job_response(urllib.parse.unquote(path[len(prefix):]))
+            log_asu_exchange("GET", path, {"request_hash": urllib.parse.unquote(path[len(prefix):])}, body, status)
             self.send(status, body)
         elif path.startswith("/logs/"):
             file_path = LOG_DIR / Path(path).name
@@ -2793,24 +2936,28 @@ class Handler(BaseHTTPRequestHandler):
             body = self.read_body()
             cached = asu_cached_job_for_request(body)
             if cached:
-                self.send(202, {
+                response = {
                     "status": "queued",
                     "request_hash": cached.get("id"),
                     "imagebuilder_status": "done",
                     "queue_position": 0,
                     "detail": "Using cached local firmware image.",
-                })
+                }
+                log_asu_exchange("POST", path, body, response, 202)
+                self.send(202, response)
                 return
             router_item = asu_router_for_request(body)
             router = router_item.get("name") if router_item else None
             queued = enqueue_manual_build(router_name=router, force=False)
-            self.send(202, {
+            response = {
                 "status": "queued",
                 "request_hash": queued.get("id"),
                 "imagebuilder_status": "init",
                 "queue_position": 0,
                 "detail": "Local build queued. Poll the web UI or /firmware/<router>/latest/ for the finished sysupgrade image.",
-            })
+            }
+            log_asu_exchange("POST", path, body, response, 202)
+            self.send(202, response)
         else:
             self.send(404, {"error": "not found"})
 
