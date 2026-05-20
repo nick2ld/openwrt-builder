@@ -1763,7 +1763,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="modal-head">
       <h2 id="logTitle">Лог задания</h2>
       <div class="row">
-        <button class="secondary" onclick="refreshSelectedLog()" data-i18n="refresh">Обновить</button>
+        <button class="secondary" onclick="refreshSelectedLog({forceUpdate:true})" data-i18n="refresh">Обновить</button>
         <button class="secondary" onclick="copySelectedLog()" data-i18n="copy">Копировать</button>
         <button class="secondary" onclick="closeLogModal()" data-i18n="close">Закрыть</button>
       </div>
@@ -2199,11 +2199,21 @@ function isLogScrolledToBottom() {
   return mainLog.scrollHeight - mainLog.scrollTop - mainLog.clientHeight < 24;
 }
 
+function logSelectionText() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return '';
+  for (let i = 0; i < selection.rangeCount; i++) {
+    const range = selection.getRangeAt(i);
+    if (range.intersectsNode(mainLog)) return selection.toString();
+  }
+  return '';
+}
+
 async function refreshSelectedLog(options = {}) {
   if (!selectedLogUrl) return;
   try {
-    const selection = window.getSelection();
-    const selectingLog = selection && !selection.isCollapsed && mainLog.contains(selection.anchorNode);
+    const selectingLog = Boolean(logSelectionText());
+    if (!options.forceUpdate && !options.forceScroll && (selectingLog || !logAutoScroll)) return;
     const shouldScroll = options.forceScroll || (logAutoScroll && isLogScrolledToBottom() && !selectingLog);
     const res = await fetch(selectedLogUrl, {cache: 'no-store'});
     mainLog.textContent = await res.text();
@@ -2214,10 +2224,8 @@ async function refreshSelectedLog(options = {}) {
 }
 
 function selectedLogText() {
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && mainLog.contains(selection.anchorNode)) {
-    return selection.toString();
-  }
+  const selected = logSelectionText();
+  if (selected) return selected;
   return mainLog.textContent || '';
 }
 
