@@ -2,6 +2,13 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.4] - 2026-05-21
+
+### Fixed
+- ImageBuilder downloads and extraction are locked per release/target to avoid `.part` file races.
+- Starting a real build now clears stale active jobs for the same router while keeping the current job.
+- Stale active jobs are marked as failed when the service starts, so old queued/downloading rows do not block new builds.
+
 ## [0.2.3] - 2026-05-21
 
 ### Fixed

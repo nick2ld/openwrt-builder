@@ -36,6 +36,8 @@ VERSION_CHECK_TIMEOUT = int(os.environ.get("OWB_VERSION_CHECK_TIMEOUT", "30"))
 BUILD_LOCK = threading.Lock()
 ENQUEUE_LOCK = threading.Lock()
 STATE_LOCK = threading.RLock()
+IMAGEBUILDER_LOCKS = {}
+IMAGEBUILDER_LOCKS_LOCK = threading.Lock()
 ACTIVE_JOBS = {}
 ACTIVE_JOBS_LOCK = threading.Lock()
 CANCELLED_JOBS = set()
@@ -660,6 +662,10 @@ def sha256_file(path):
 def download_file(url, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
+    try:
+        tmp.unlink()
+    except FileNotFoundError:
+        pass
     req = urllib.request.Request(url, headers={"User-Agent": "local-openwrt-builder/1.0"})
     with urllib.request.urlopen(req, timeout=120) as resp, tmp.open("wb") as out:
         shutil.copyfileobj(resp, out)
@@ -687,32 +693,43 @@ def verify_download_sha256(release, target, subtarget, file_path):
     return False
 
 
+def imagebuilder_lock(release, target, subtarget):
+    key = f"{release}/{target}/{subtarget}"
+    with IMAGEBUILDER_LOCKS_LOCK:
+        lock = IMAGEBUILDER_LOCKS.get(key)
+        if not lock:
+            lock = threading.Lock()
+            IMAGEBUILDER_LOCKS[key] = lock
+        return lock
+
+
 def ensure_imagebuilder(release, router, log):
     target = router["target"]
     subtarget = router["subtarget"]
-    archive = DOWNLOAD_DIR / "imagebuilders" / release / f"{target}-{subtarget}.tar.zst"
-    extracted = BUILD_DIR / release / f"{target}-{subtarget}"
-    marker = extracted / ".ready"
-    if marker.exists():
-        return extracted
-    if not archive.exists():
-        url = imagebuilder_url(release, target, subtarget)
-        log(f"Downloading ImageBuilder: {url}")
-        download_file(url, archive)
-        verify_download_sha256(release, target, subtarget, archive)
-    if extracted.exists():
-        shutil.rmtree(extracted)
-    extracted.parent.mkdir(parents=True, exist_ok=True)
-    log(f"Extracting ImageBuilder into {extracted}")
-    subprocess.run(["tar", "--zstd", "-xf", str(archive), "-C", str(extracted.parent)], check=True)
-    candidates = [p for p in extracted.parent.iterdir() if p.is_dir() and "imagebuilder" in p.name.lower()]
-    newest = max(candidates, key=lambda p: p.stat().st_mtime)
-    if newest != extracted:
+    with imagebuilder_lock(release, target, subtarget):
+        archive = DOWNLOAD_DIR / "imagebuilders" / release / f"{target}-{subtarget}.tar.zst"
+        extracted = BUILD_DIR / release / f"{target}-{subtarget}"
+        marker = extracted / ".ready"
+        if marker.exists():
+            return extracted
+        if not archive.exists():
+            url = imagebuilder_url(release, target, subtarget)
+            log(f"Downloading ImageBuilder: {url}")
+            download_file(url, archive)
+            verify_download_sha256(release, target, subtarget, archive)
         if extracted.exists():
             shutil.rmtree(extracted)
-        newest.rename(extracted)
-    marker.write_text(utc_now(), encoding="utf-8")
-    return extracted
+        extracted.parent.mkdir(parents=True, exist_ok=True)
+        log(f"Extracting ImageBuilder into {extracted}")
+        subprocess.run(["tar", "--zstd", "-xf", str(archive), "-C", str(extracted.parent)], check=True)
+        candidates = [p for p in extracted.parent.iterdir() if p.is_dir() and "imagebuilder" in p.name.lower()]
+        newest = max(candidates, key=lambda p: p.stat().st_mtime)
+        if newest != extracted:
+            if extracted.exists():
+                shutil.rmtree(extracted)
+            newest.rename(extracted)
+        marker.write_text(utc_now(), encoding="utf-8")
+        return extracted
 
 
 def package_name_from_apk(filename):
@@ -1278,6 +1295,37 @@ def active_job_for_router(router_name):
     )
 
 
+def clear_stale_active_jobs(router_name, keep_job_id=None):
+    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+
+    def mutate(st):
+        jobs = []
+        for job in st.get("jobs", []):
+            if job.get("id") == keep_job_id:
+                jobs.append(job)
+                continue
+            if job.get("router") == router_name and job.get("status") in active:
+                continue
+            jobs.append(job)
+        st["jobs"] = jobs[:100]
+    update_state(mutate)
+
+
+def mark_stale_active_jobs():
+    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+
+    def mutate(st):
+        for job in st.get("jobs", []):
+            if job.get("status") not in active:
+                continue
+            job["status"] = "failed"
+            job["progress"] = 100
+            job["error"] = "Stale active job after service restart"
+            job["last_line"] = "Stale active job after service restart"
+            job["updated_at"] = utc_now()
+    update_state(mutate)
+
+
 def build_input_key(cfg, router):
     sources = []
     for src in cfg.get("package_sources", []):
@@ -1587,6 +1635,7 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
                     log("Skipping build: previous oversized firmware failure with the same package set")
                     set_job("failed", {"error": message, "error_type": "image_too_big", "blocked_by": oversized.get("id", "")})
                     continue
+            clear_stale_active_jobs(name, keep_job_id=job_id)
             built_marker = firmware_manifest_path(name, release)
             if built_marker.exists() and not force:
                 log("Firmware already exists; skipping")
@@ -3329,6 +3378,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ensure_dirs()
     prune_all_router_firmware(keep=3)
+    mark_stale_active_jobs()
     prune_jobs_state()
     cfg = config()
     scheduler.start()
