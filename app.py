@@ -560,6 +560,27 @@ def github_repo_from_url(url):
     return None
 
 
+def github_release_assets(release_obj, log):
+    assets_url = release_obj.get("assets_url")
+    if not assets_url:
+        return release_obj.get("assets", []) or []
+    assets = []
+    for page in range(1, 11):
+        separator = "&" if "?" in assets_url else "?"
+        page_url = f"{assets_url}{separator}per_page=100&page={page}"
+        try:
+            page_assets = json.loads(http_text(page_url))
+        except Exception as exc:
+            log(f"Could not read GitHub release assets {page_url}: {exc}")
+            return assets or (release_obj.get("assets", []) or [])
+        if not page_assets:
+            break
+        assets.extend(page_assets)
+        if len(page_assets) < 100:
+            break
+    return assets or (release_obj.get("assets", []) or [])
+
+
 def list_apks_from_github_releases(url, src, release, arch, target, subtarget, requested, log):
     repo = src.get("github_repo") or github_repo_from_url(url)
     if not repo:
@@ -577,7 +598,7 @@ def list_apks_from_github_releases(url, src, release, arch, target, subtarget, r
         name = str(rel.get("name", "")).lower().lstrip("v")
         if wanted not in [tag, name] and not tag.startswith(wanted):
             continue
-        assets.extend(rel.get("assets", []) or [])
+        assets.extend(github_release_assets(rel, log))
     if not assets and releases:
         assets = releases[0].get("assets", []) or []
     regex = src.get("regex", "").strip()
