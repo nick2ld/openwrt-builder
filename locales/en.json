@@ -82,6 +82,7 @@
   "missing": "Missing",
   "noMatchingApk": "No matching APK found",
   "logCopied": "Log copied to clipboard",
+  "copyFailed": "Could not copy",
   "versionNoCommit": "Version is not recorded; latest: {latest}. Update from console once.",
   "updateAvailable": "Update available: {current} → {latest}",
   "updateAvailableCached": "Update available: {current} → {latest} (latest from cache; GitHub is not responding now)",

@@ -1785,6 +1785,7 @@ let jobCache = [];
 let routerStatusCache = {};
 let messages = {};
 let currentLang = localStorage.getItem('owb_language') || ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
+let logAutoScroll = true;
 
 function t(key, params = {}) {
   let text = messages[key] || key;
@@ -2181,7 +2182,8 @@ async function viewLog(url, label = '') {
   selectedLogLabel = label || url;
   logTitle.textContent = selectedLogLabel;
   logModal.classList.add('open');
-  await refreshSelectedLog();
+  logAutoScroll = true;
+  await refreshSelectedLog({forceScroll: true});
 }
 
 function viewJobLog(index) {
@@ -2193,23 +2195,59 @@ function closeLogModal() {
   logModal.classList.remove('open');
 }
 
-async function refreshSelectedLog() {
+function isLogScrolledToBottom() {
+  return mainLog.scrollHeight - mainLog.scrollTop - mainLog.clientHeight < 24;
+}
+
+async function refreshSelectedLog(options = {}) {
   if (!selectedLogUrl) return;
   try {
+    const selection = window.getSelection();
+    const selectingLog = selection && !selection.isCollapsed && mainLog.contains(selection.anchorNode);
+    const shouldScroll = options.forceScroll || (logAutoScroll && isLogScrolledToBottom() && !selectingLog);
     const res = await fetch(selectedLogUrl, {cache: 'no-store'});
     mainLog.textContent = await res.text();
-    mainLog.scrollTop = mainLog.scrollHeight;
+    if (shouldScroll) mainLog.scrollTop = mainLog.scrollHeight;
   } catch (e) {
     mainLog.textContent = e.message;
   }
 }
 
+function selectedLogText() {
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && mainLog.contains(selection.anchorNode)) {
+    return selection.toString();
+  }
+  return mainLog.textContent || '';
+}
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const ok = document.execCommand('copy');
+  textarea.remove();
+  if (!ok) throw new Error('copy command failed');
+}
+
 async function copySelectedLog() {
-  const text = mainLog.textContent || '';
+  const text = selectedLogText();
   if (!text) return;
-  await navigator.clipboard.writeText(text);
   const old = logTitle.textContent;
-  logTitle.textContent = t('logCopied');
+  try {
+    await writeClipboardText(text);
+    logTitle.textContent = t('logCopied');
+  } catch (e) {
+    logTitle.textContent = t('copyFailed') + ': ' + e.message;
+  }
   setTimeout(() => logTitle.textContent = old, 1200);
 }
 
@@ -2305,6 +2343,15 @@ loadLocale(currentLang).then(() => {
   checkVersion();
 });
 setInterval(load, 3000);
+mainLog.addEventListener('scroll', () => {
+  logAutoScroll = isLogScrolledToBottom();
+});
+mainLog.addEventListener('mousedown', () => {
+  logAutoScroll = false;
+});
+mainLog.addEventListener('keydown', () => {
+  logAutoScroll = false;
+});
 </script>
 </body>
 </html>"""

@@ -82,6 +82,7 @@
   "missing": "Не хватает",
   "noMatchingApk": "Подходящих APK не найдено",
   "logCopied": "Лог скопирован в буфер обмена",
+  "copyFailed": "Не удалось скопировать",
   "versionNoCommit": "Версия не записана; latest: {latest}. Обновите из консоли один раз.",
   "updateAvailable": "Доступно обновление: {current} → {latest}",
   "updateAvailableCached": "Доступно обновление: {current} → {latest} (latest из кеша; GitHub сейчас не ответил)",
