@@ -34,6 +34,7 @@ RELEASE_CACHE_TTL = 3600
 HTTP_TIMEOUT = int(os.environ.get("OWB_HTTP_TIMEOUT", "20"))
 VERSION_CHECK_TIMEOUT = int(os.environ.get("OWB_VERSION_CHECK_TIMEOUT", "30"))
 BUILD_LOCK = threading.Lock()
+ENQUEUE_LOCK = threading.Lock()
 ACTIVE_JOBS = {}
 ACTIVE_JOBS_LOCK = threading.Lock()
 CANCELLED_JOBS = set()
@@ -1184,6 +1185,21 @@ def record_job(job_id, router, release, status, log_path, extra=None):
     update_state(mutate)
 
 
+def find_job(job_id):
+    return next((j for j in state().get("jobs", []) if j.get("id") == job_id), None)
+
+
+def active_job_for_router(router_name):
+    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+    return next(
+        (
+            j for j in state().get("jobs", [])
+            if j.get("router") == router_name and j.get("status") in active
+        ),
+        None,
+    )
+
+
 def append_job_log(log_path, msg):
     line = f"[{utc_now()}] {msg}\n"
     with log_path.open("a", encoding="utf-8") as fh:
@@ -1229,18 +1245,38 @@ def cancel_job(job_id):
     return {"status": "cancelled", "id": job_id}
 
 
-def enqueue_manual_build(router_name=None, force=True):
+def enqueue_manual_build(router_name=None, force=True, job_id_override=None, queued_message="Manual build queued"):
     name = router_name or "all"
-    job_id = f"{int(time.time())}-manual-{sanitize_job_part(name)}"
-    log_path = LOG_DIR / f"{job_id}.log"
-    append_job_log(log_path, "Manual build queued")
-    record_job(job_id, name, "pending", "queued", log_path)
-    thread = threading.Thread(
-        target=lambda: manual_build_worker(job_id, log_path, router_name, force),
-        daemon=True,
-    )
-    thread.start()
-    return {"status": "queued", "id": job_id, "log": f"/logs/{log_path.name}"}
+    with ENQUEUE_LOCK:
+        if job_id_override:
+            existing = find_job(job_id_override)
+            if existing:
+                return {
+                    "status": existing.get("status", "queued"),
+                    "id": existing.get("id"),
+                    "log": existing.get("log", ""),
+                    "existing": True,
+                }
+        if not force:
+            existing = active_job_for_router(name)
+            if existing:
+                return {
+                    "status": existing.get("status", "queued"),
+                    "id": existing.get("id"),
+                    "log": existing.get("log", ""),
+                    "existing": True,
+                }
+
+        job_id = job_id_override or f"{int(time.time())}-manual-{sanitize_job_part(name)}"
+        log_path = LOG_DIR / f"{sanitize_job_part(job_id)}.log"
+        append_job_log(log_path, queued_message)
+        record_job(job_id, name, "pending", "queued", log_path)
+        thread = threading.Thread(
+            target=lambda: manual_build_worker(job_id, log_path, router_name, force),
+            daemon=True,
+        )
+        thread.start()
+        return {"status": "queued", "id": job_id, "log": f"/logs/{log_path.name}", "existing": False}
 
 
 def manual_build_worker(job_id, log_path, router_name, force):
@@ -3068,13 +3104,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             router_item = asu_router_for_request(body)
             router = router_item.get("name") if router_item else None
-            queued = enqueue_manual_build(router_name=router, force=False)
+            request_hash = str(body.get("request_hash") or "").strip()
+            queued = enqueue_manual_build(
+                router_name=router,
+                force=False,
+                job_id_override=request_hash or None,
+                queued_message="ASU build queued",
+            )
             response = {
                 "status": "queued",
                 "request_hash": queued.get("id"),
                 "imagebuilder_status": "init",
                 "queue_position": 0,
-                "detail": "Local build queued. Poll the web UI or /firmware/<router>/latest/ for the finished sysupgrade image.",
+                "detail": "Existing local build reused." if queued.get("existing") else "Local build queued. Poll the web UI or /firmware/<router>/latest/ for the finished sysupgrade image.",
             }
             log_asu_exchange("POST", path, body, response, 202)
             self.send(202, response)
