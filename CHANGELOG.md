@@ -2,6 +2,12 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.2] - 2026-05-21
+
+### Fixed
+- Self-update status no longer reads stale success lines from previous update attempts.
+- The self-update log is reset at the start of a new web UI update run.
+
 ## [0.2.1] - 2026-05-21
 
 ### Changed

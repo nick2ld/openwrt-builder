@@ -512,7 +512,7 @@ def run_self_update():
     log_path = LOG_DIR / "self-update.log"
     cmd = ["sudo", "-n", "/usr/local/sbin/openwrt-builder-update"]
     unit_name = ""
-    with log_path.open("a", encoding="utf-8") as logfh:
+    with log_path.open("w", encoding="utf-8") as logfh:
         logfh.write(f"[{utc_now()}] Running self update\n")
         logfh.flush()
         try:
@@ -581,13 +581,16 @@ def systemd_unit_status(unit_name):
 def self_update_status():
     log_path = LOG_DIR / "self-update.log"
     text = read_tail(log_path)
-    lower = text.lower()
+    marker = "Running self update"
+    marker_pos = text.rfind(marker)
+    scoped_text = text[marker_pos:] if marker_pos >= 0 else text
+    lower = scoped_text.lower()
     current = read_text_file(APP_DIR / "VERSION") or read_text_file(APP_DIR / "COMMIT")
     latest = state().get("latest_app_version") or state().get("latest_app_commit", "")
     update_state_item = state().get("self_update", {})
     unit_name = update_state_item.get("unit", "")
     if not unit_name:
-        match = re.search(r"Running as unit:\s*([^\s]+)", text)
+        match = re.search(r"Running as unit:\s*([^\s]+)", scoped_text)
         if match:
             unit_name = match.group(1).strip()
     unit_status = systemd_unit_status(unit_name)
@@ -639,7 +642,7 @@ def self_update_status():
         "unit": unit_name,
         "unit_status": unit_status,
     }
-    for line in reversed(text.splitlines()):
+    for line in reversed(scoped_text.splitlines()):
         if line.strip():
             info["last_line"] = line.strip()
             break
