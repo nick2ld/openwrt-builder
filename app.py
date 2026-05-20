@@ -1535,6 +1535,10 @@ def request_package_names(body):
     return {name for name in (package_token_name(item) for item in split_packages(packages)) if name}
 
 
+def normalized_profile(value):
+    return str(value or "").replace(",", "_")
+
+
 def asu_router_for_request(body):
     board = body.get("profile") or body.get("board") or body.get("id") or body.get("target")
     target = body.get("target", "")
@@ -1545,7 +1549,7 @@ def asu_router_for_request(body):
     for item in config().get("routers", []):
         if not item.get("enabled", True):
             continue
-        if board and board not in [item.get("name"), item.get("profile")]:
+        if board and normalized_profile(board) not in [normalized_profile(item.get("name")), normalized_profile(item.get("profile"))]:
             continue
         if req_target and req_target != item.get("target"):
             continue
@@ -1632,13 +1636,23 @@ def asu_job_response(job_id):
                 "publishing": "signing_images",
             }.get(status, "init"),
         }, 202
-    if status == "success" and job.get("output"):
+    if status in ["success", "skipped"] and job.get("output"):
         output = job["output"].lstrip("/")
         parts = output.split("/")
         router = parts[1] if len(parts) > 1 else job.get("router", "")
         release = parts[2] if len(parts) > 2 else job.get("release", "")
-        image_name = parts[-1]
         manifest = read_json(OUTPUT_DIR / router / release / "manifest.json", {})
+        if len(parts) <= 3 or not parts[-1]:
+            image_name = manifest.get("sysupgrade", "")
+        else:
+            image_name = parts[-1]
+        if not image_name:
+            return {
+                "status": 500,
+                "detail": "cached firmware manifest has no sysupgrade image",
+                "request_hash": job_id,
+                "stderr": last_log_line(job.get("log", "")),
+            }, 500
         sha = manifest.get("sha256", "")
         return {
             "status": 200,
