@@ -2,6 +2,12 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.5] - 2026-05-21
+
+### Fixed
+- Stopping a build now cancels every active job for the same router instead of leaving a duplicate build running.
+- Build cancellation is checked between ImageBuilder/APK preparation phases, before `make image` is started.
+
 ## [0.2.4] - 2026-05-21
 
 ### Fixed

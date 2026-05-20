@@ -1392,23 +1392,39 @@ def unregister_process(job_id):
         ACTIVE_JOBS.pop(job_id, None)
 
 
+def active_jobs_for_router(router_name):
+    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+    return [
+        j for j in state().get("jobs", [])
+        if j.get("router") == router_name and j.get("status") in active
+    ]
+
+
 def cancel_job(job_id):
-    log_path = LOG_DIR / f"{Path(job_id).name}.log"
     previous = next((j for j in state().get("jobs", []) if j.get("id") == job_id), {})
     router = previous.get("router") or ""
-    release = previous.get("release") or ""
-    with ACTIVE_JOBS_LOCK:
-        CANCELLED_JOBS.add(job_id)
-        proc = ACTIVE_JOBS.get(job_id)
-    append_job_log(log_path, "Cancellation requested")
-    if proc and proc.poll() is None:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except Exception:
-            proc.terminate()
-    record_job(job_id, router, release, "cancelled", log_path, {"error": "Cancelled by user"})
+    jobs = active_jobs_for_router(router) if router else []
+    if not any(j.get("id") == job_id for j in jobs):
+        jobs.append(previous or {"id": job_id, "router": router, "release": ""})
+    cancelled_ids = []
+    for job in jobs:
+        current_id = str(job.get("id") or "").strip()
+        if not current_id:
+            continue
+        log_path = LOG_DIR / f"{sanitize_job_part(current_id)}.log"
+        with ACTIVE_JOBS_LOCK:
+            CANCELLED_JOBS.add(current_id)
+            proc = ACTIVE_JOBS.get(current_id)
+        append_job_log(log_path, "Cancellation requested")
+        if proc and proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                proc.terminate()
+        record_job(current_id, job.get("router") or router, job.get("release") or "", "cancelled", log_path, {"error": "Cancelled by user"})
+        cancelled_ids.append(current_id)
     prune_jobs_state()
-    return {"status": "cancelled", "id": job_id}
+    return {"status": "cancelled", "id": job_id, "cancelled_ids": cancelled_ids}
 
 
 def enqueue_manual_build(router_name=None, force=True, job_id_override=None, queued_message="Manual build queued"):
@@ -1619,7 +1635,16 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
             payload = {"build_key": build_key}
             if extra:
                 payload.update(extra)
+            if status not in {"cancelled", "failed", "success", "skipped"} and is_job_cancelled(job_id):
+                return
             record_job(job_id, name, release, status, log_path, payload)
+
+        def stop_if_cancelled(stage):
+            if not is_job_cancelled(job_id):
+                return False
+            log(f"Build cancelled {stage}")
+            set_job("cancelled", {"error": "Cancelled by user"})
+            return True
 
         if is_job_cancelled(job_id):
             log("Build cancelled before start")
@@ -1643,14 +1668,20 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
                 continue
             set_job("downloading")
             builder = ensure_imagebuilder(release, router, log)
+            if stop_if_cancelled("after ImageBuilder setup"):
+                continue
             set_job("checking")
             apks = download_external_apks(cfg, release, router, log)
+            if stop_if_cancelled("after APK check"):
+                continue
             local_apks = copy_apks_to_builder(builder, apks)
             if cfg.get("allow_untrusted_apk", True) and local_apks:
                 patch_imagebuilder_for_untrusted_apk(builder, log)
             files_dir = builder / "files"
             if cfg.get("allow_untrusted_apk", True):
                 extract_apk_overlay(local_apks, files_dir, log)
+            if stop_if_cancelled("before ImageBuilder run"):
+                continue
 
             packages = split_packages(router.get("packages", ""))
             package_args = packages + [str(p) for p in local_apks]
