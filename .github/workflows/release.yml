@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="$(cat VERSION | tr -d '[:space:]')"
+          if [ "$tag" != "v$version" ]; then
+            echo "Tag $tag does not match VERSION $version"
+            exit 1
+          fi
+
+      - name: Build archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cat VERSION | tr -d '[:space:]')"
+          archive="openwrt-custom-local-builder-${version}.zip"
+          mkdir -p dist/openwrt-custom-local-builder-${version}
+          cp -a app.py install.sh openwrt-builder.service example-config.json README.md CHANGELOG.md VERSION locales dist/openwrt-custom-local-builder-${version}/
+          (cd dist && zip -r "../${archive}" "openwrt-custom-local-builder-${version}")
+          echo "archive=${archive}" >> "$GITHUB_ENV"
+
+      - name: Extract release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cat VERSION | tr -d '[:space:]')"
+          awk -v version="$version" '
+            $0 ~ "^## \\[" version "\\]" { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Release v${version}" > release-notes.md
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: OpenWrt Custom Local Builder ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: ${{ env.archive }}

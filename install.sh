@@ -132,12 +132,18 @@ install_files() {
   log "installing application into $APP_DIR"
   install -m 0755 "$SOURCE_DIR/app.py" "$APP_DIR/app.py"
   install -m 0644 "$SOURCE_DIR/README.md" "$APP_DIR/README.md" 2>/dev/null || true
+  install -m 0644 "$SOURCE_DIR/CHANGELOG.md" "$APP_DIR/CHANGELOG.md" 2>/dev/null || true
   install -m 0644 "$SOURCE_DIR/example-config.json" "$APP_DIR/example-config.json" 2>/dev/null || true
   if [ -d "$SOURCE_DIR/locales" ]; then
     install -d -m 0755 "$APP_DIR/locales"
     install -m 0644 "$SOURCE_DIR/locales/"*.json "$APP_DIR/locales/" 2>/dev/null || true
   fi
-  printf '%s\n' "${REF}" >"$APP_DIR/VERSION"
+  if [ -f "$SOURCE_DIR/VERSION" ]; then
+    install -m 0644 "$SOURCE_DIR/VERSION" "$APP_DIR/VERSION"
+  else
+    printf '0.0.0-dev\n' >"$APP_DIR/VERSION"
+  fi
+  printf '%s\n' "${REF}" >"$APP_DIR/REF"
   if [ -d "$SOURCE_DIR/.git" ]; then
     git -C "$SOURCE_DIR" rev-parse HEAD >"$APP_DIR/COMMIT" 2>/dev/null || true
   elif [ -n "${SOURCE_COMMIT:-}" ]; then

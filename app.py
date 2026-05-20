@@ -393,9 +393,44 @@ def installed_version_info():
     return {
         "repo": REPO_FULL_NAME,
         "repo_url": REPO_URL,
-        "branch": read_text_file(APP_DIR / "VERSION") or "main",
+        "version": read_text_file(APP_DIR / "VERSION") or "0.0.0-dev",
+        "branch": read_text_file(APP_DIR / "REF") or "main",
         "commit": read_text_file(APP_DIR / "COMMIT"),
     }
+
+
+def parse_version(value):
+    text = str(value or "").strip().lstrip("v")
+    parts = []
+    for part in text.split("."):
+        match = re.match(r"^(\d+)", part)
+        parts.append(int(match.group(1)) if match else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def latest_release_version():
+    errors = []
+    urls = [
+        f"https://api.github.com/repos/{REPO_FULL_NAME}/releases/latest",
+        f"https://api.github.com/repos/{REPO_FULL_NAME}/tags",
+    ]
+    for url in urls:
+        try:
+            data = json.loads(http_text(url, timeout=VERSION_CHECK_TIMEOUT))
+            if isinstance(data, dict):
+                tag = data.get("tag_name", "")
+                if tag:
+                    return tag.lstrip("v")
+            if isinstance(data, list):
+                versions = [str(item.get("name", "")).lstrip("v") for item in data if str(item.get("name", "")).startswith("v")]
+                versions = [v for v in versions if re.match(r"^\d+\.\d+\.\d+", v)]
+                if versions:
+                    return sorted(versions, key=parse_version, reverse=True)[0]
+        except Exception as exc:
+            errors.append(f"{urllib.parse.urlparse(url).netloc}: {exc}")
+    raise RuntimeError("; ".join(errors) or "cannot check latest release")
 
 
 def latest_repo_commit(branch="main"):
@@ -433,27 +468,43 @@ def latest_repo_commit(branch="main"):
 
 def version_status():
     info = installed_version_info()
-    latest = ""
+    latest_version = ""
+    latest_commit = ""
     error = ""
     try:
-        latest = latest_repo_commit("main")
+        latest_version = latest_release_version()
         def mutate(st):
-            st["latest_app_commit"] = latest
-            st["latest_app_commit_checked_at"] = utc_now()
+            st["latest_app_version"] = latest_version
+            st["latest_app_version_checked_at"] = utc_now()
         update_state(mutate)
     except Exception as exc:
         error = str(exc)
-        latest = state().get("latest_app_commit", "")
-    current = info.get("commit") or ""
+        latest_version = state().get("latest_app_version", "")
+    try:
+        latest_commit = latest_repo_commit("main")
+        def mutate_commit(st):
+            st["latest_app_commit"] = latest_commit
+            st["latest_app_commit_checked_at"] = utc_now()
+        update_state(mutate_commit)
+    except Exception:
+        latest_commit = state().get("latest_app_commit", "")
+    current_version = info.get("version") or "0.0.0-dev"
+    current_commit = info.get("commit") or ""
+    update_available = bool(latest_version and parse_version(latest_version) > parse_version(current_version))
+    if not latest_version and current_commit and latest_commit:
+        update_available = current_commit != latest_commit
     return {
         **info,
-        "latest_commit": latest,
-        "update_available": bool(current and latest and current != latest),
-        "current_short": current[:7] if current else "",
-        "latest_short": latest[:7] if latest else "",
+        "latest_version": latest_version,
+        "latest_commit": latest_commit,
+        "update_available": update_available,
+        "current_short": f"v{current_version}" if current_version else (current_commit[:7] if current_commit else ""),
+        "latest_short": f"v{latest_version}" if latest_version else (latest_commit[:7] if latest_commit else ""),
+        "current_commit_short": current_commit[:7] if current_commit else "",
+        "latest_commit_short": latest_commit[:7] if latest_commit else "",
         "error": error,
-        "latest_cached": bool(error and latest),
-        "latest_checked_at": state().get("latest_app_commit_checked_at", ""),
+        "latest_cached": bool(error and latest_version),
+        "latest_checked_at": state().get("latest_app_version_checked_at", ""),
     }
 
 
@@ -531,8 +582,8 @@ def self_update_status():
     log_path = LOG_DIR / "self-update.log"
     text = read_tail(log_path)
     lower = text.lower()
-    current = read_text_file(APP_DIR / "COMMIT")
-    latest = state().get("latest_app_commit", "")
+    current = read_text_file(APP_DIR / "VERSION") or read_text_file(APP_DIR / "COMMIT")
+    latest = state().get("latest_app_version") or state().get("latest_app_commit", "")
     update_state_item = state().get("self_update", {})
     unit_name = update_state_item.get("unit", "")
     if not unit_name:
