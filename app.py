@@ -1404,6 +1404,32 @@ def find_sysupgrade_image(out_dir, profile):
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def image_too_big_error(log_path):
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+    match = re.search(
+        r"WARNING:\s+Image file\s+(.+?)\s+is too big:\s+(\d+)\s*>\s*(\d+)",
+        text,
+    )
+    if not match:
+        return ""
+    image_path, actual, limit = match.groups()
+    try:
+        actual_mb = int(actual) / 1024 / 1024
+        limit_mb = int(limit) / 1024 / 1024
+        size_text = f"{actual_mb:.1f} MB > {limit_mb:.1f} MB"
+    except ValueError:
+        size_text = f"{actual} > {limit}"
+    return (
+        "Слишком много пакетов: образ прошивки больше допустимого размера "
+        f"для роутера ({size_text}). Такая прошивка не установится. "
+        "Уберите часть пакетов и запустите сборку заново. "
+        f"ImageBuilder: {Path(image_path).name}"
+    )
+
+
 def run_build(release, router_name=None, force=False, job_id_override=None, log_path_override=None):
     cfg = config()
     routers = [r for r in cfg.get("routers", []) if r.get("enabled", True)]
@@ -1477,6 +1503,9 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
                 log("Build cancelled")
                 set_job("cancelled", {"error": "Cancelled by user"})
                 continue
+            too_big_error = image_too_big_error(log_path)
+            if too_big_error:
+                raise RuntimeError(too_big_error)
             if return_code != 0:
                 raise RuntimeError(f"ImageBuilder failed with exit code {return_code}")
             image = find_sysupgrade_image(builder / "bin", profile)
