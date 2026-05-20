@@ -606,9 +606,11 @@ def github_release_assets(release_obj, log):
 
 
 def github_direct_release_apks(repo, release_obj, release, arch, target, subtarget, missing_packages, log):
-    tag = str(release_obj.get("tag_name") or f"v{release}")
-    if not tag:
-        return []
+    release_tag = str(release_obj.get("tag_name") or "").strip()
+    tags = [release_tag] if release_tag else []
+    for candidate in [f"v{release}", release]:
+        if candidate not in tags:
+            tags.append(candidate)
     suffixes = []
     if arch and target and subtarget:
         suffixes.extend([
@@ -622,23 +624,35 @@ def github_direct_release_apks(repo, release_obj, release, arch, target, subtarg
         ])
     links = []
     for package in missing_packages:
-        for suffix in suffixes:
-            filename = f"{package}{suffix}"
-            direct = (
-                f"https://github.com/{repo}/releases/download/"
-                f"{urllib.parse.quote(tag, safe='')}/{urllib.parse.quote(filename, safe='')}"
-            )
-            if http_url_exists(direct, timeout=10):
-                log(f"Found GitHub release APK by direct URL: {filename}")
-                links.append(direct)
+        found = False
+        for tag in tags:
+            if found:
                 break
+            for suffix in suffixes:
+                filename = f"{package}{suffix}"
+                direct = (
+                    f"https://github.com/{repo}/releases/download/"
+                    f"{urllib.parse.quote(tag, safe='')}/{urllib.parse.quote(filename, safe='')}"
+                )
+                if http_url_exists(direct, timeout=10):
+                    log(f"Found GitHub release APK by direct URL: {filename}")
+                    links.append(direct)
+                    found = True
+                    break
     return links
 
 
-def list_apks_from_github_releases(url, src, release, arch, target, subtarget, requested, log):
-    repo = src.get("github_repo") or github_repo_from_url(url)
-    if not repo:
-        return []
+def github_release_objects(repo, release, log):
+    release_tags = []
+    for candidate in [f"v{release}", release]:
+        if candidate not in release_tags:
+            release_tags.append(candidate)
+    for tag in release_tags:
+        api = f"https://api.github.com/repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}"
+        try:
+            return [json.loads(http_text(api))]
+        except Exception as exc:
+            log(f"Could not read GitHub release tag {repo}@{tag}: {exc}")
     api = f"https://api.github.com/repos/{repo}/releases"
     try:
         releases = json.loads(http_text(api))
@@ -646,17 +660,33 @@ def list_apks_from_github_releases(url, src, release, arch, target, subtarget, r
         log(f"Could not read GitHub releases {repo}: {exc}")
         return []
     wanted = release.lower().lstrip("v")
-    assets = []
-    matched_releases = []
+    matched = []
     for rel in releases:
         tag = str(rel.get("tag_name", "")).lower().lstrip("v")
         name = str(rel.get("name", "")).lower().lstrip("v")
-        if wanted not in [tag, name] and not tag.startswith(wanted):
-            continue
+        if wanted in [tag, name] or tag.startswith(wanted):
+            matched.append(rel)
+    return matched
+
+
+def list_apks_from_github_releases(url, src, release, arch, target, subtarget, requested, log):
+    repo = src.get("github_repo") or github_repo_from_url(url)
+    if not repo:
+        return []
+    direct_links = []
+    if requested:
+        direct_links = github_direct_release_apks(repo, {"tag_name": f"v{release}"}, release, arch, target, subtarget, requested, log)
+        direct_found = {package_name_from_apk(Path(urllib.parse.urlparse(link).path).name) for link in direct_links}
+        if all(package in direct_found for package in requested):
+            return direct_links
+    releases = github_release_objects(repo, release, log)
+    if not releases:
+        return direct_links
+    assets = []
+    matched_releases = []
+    for rel in releases:
         matched_releases.append(rel)
         assets.extend(github_release_assets(rel, log))
-    if not assets and releases:
-        assets = releases[0].get("assets", []) or []
     regex = src.get("regex", "").strip()
     rx = re.compile(regex) if regex else None
     links = []
@@ -672,6 +702,7 @@ def list_apks_from_github_releases(url, src, release, arch, target, subtarget, r
         if not package_requested(filename, requested):
             continue
         links.append(url)
+    links.extend(link for link in direct_links if link not in links)
     if requested and matched_releases:
         found = {package_name_from_apk(Path(urllib.parse.urlparse(link).path).name) for link in links}
         missing = [package for package in requested if package not in found]
