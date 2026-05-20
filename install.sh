@@ -162,7 +162,15 @@ install_updater() {
   cat >"$UPDATE_SCRIPT_FILE" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
-curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | REPO="${REPO}" REF="main" APP_USER="${APP_USER}" APP_DIR="${APP_DIR}" DATA_DIR="${DATA_DIR}" PORT="${PORT}" SERVICE_NAME="${SERVICE_NAME}" bash
+LOG_FILE="${DATA_DIR}/logs/self-update.log"
+echo "[\$(date -Is)] downloading and installing ${REPO}@main" >>"\$LOG_FILE"
+if curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | REPO="${REPO}" REF="main" APP_USER="${APP_USER}" APP_DIR="${APP_DIR}" DATA_DIR="${DATA_DIR}" PORT="${PORT}" SERVICE_NAME="${SERVICE_NAME}" bash; then
+  echo "[\$(date -Is)] finished openwrt-builder self-update" >>"\$LOG_FILE"
+else
+  rc="\$?"
+  echo "[\$(date -Is)] failed openwrt-builder self-update with exit code \$rc" >>"\$LOG_FILE"
+  exit "\$rc"
+fi
 EOF
   chmod 0755 "$UPDATE_SCRIPT_FILE"
   chown root:root "$UPDATE_SCRIPT_FILE"

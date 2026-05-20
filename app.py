@@ -452,6 +452,7 @@ def version_status():
 def run_self_update():
     log_path = LOG_DIR / "self-update.log"
     cmd = ["sudo", "-n", "/usr/local/sbin/openwrt-builder-update"]
+    unit_name = ""
     with log_path.open("a", encoding="utf-8") as logfh:
         logfh.write(f"[{utc_now()}] Running self update\n")
         logfh.flush()
@@ -476,15 +477,46 @@ def run_self_update():
             output = proc.stdout or ""
             if output:
                 logfh.write(output)
+                match = re.search(r"Running as unit:\s*([^\s]+)", output)
+                if match:
+                    unit_name = match.group(1).strip()
             if proc.returncode != 0 and "Running as unit:" not in output:
                 logfh.write(f"[{utc_now()}] ERROR: updater helper failed with exit code {proc.returncode}\n")
                 raise RuntimeError((output.strip() or f"updater helper failed with exit code {proc.returncode}"))
             logfh.write(f"[{utc_now()}] Updater helper accepted by systemd\n")
 
     def mutate(st):
-        st["self_update"] = {"started_at": utc_now(), "status": "running", "log": "/logs/self-update.log"}
+        st["self_update"] = {
+            "started_at": utc_now(),
+            "status": "running",
+            "log": "/logs/self-update.log",
+            "unit": unit_name,
+        }
     update_state(mutate)
-    return {"status": "started", "log": "/logs/self-update.log"}
+    return {"status": "started", "log": "/logs/self-update.log", "unit": unit_name}
+
+
+def systemd_unit_status(unit_name):
+    if not unit_name:
+        return {}
+    try:
+        proc = subprocess.run(
+            ["systemctl", "show", unit_name, "--no-page", "--property=ActiveState,SubState,Result,ExecMainStatus"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+    result = {}
+    for line in proc.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key] = value
+    if proc.returncode != 0:
+        result["error"] = proc.stderr.strip() or f"systemctl show exited {proc.returncode}"
+    return result
 
 
 def self_update_status():
@@ -493,6 +525,13 @@ def self_update_status():
     lower = text.lower()
     current = read_text_file(APP_DIR / "COMMIT")
     latest = state().get("latest_app_commit", "")
+    update_state_item = state().get("self_update", {})
+    unit_name = update_state_item.get("unit", "")
+    if not unit_name:
+        match = re.search(r"Running as unit:\s*([^\s]+)", text)
+        if match:
+            unit_name = match.group(1).strip()
+    unit_status = systemd_unit_status(unit_name)
     status = "idle"
     progress = 0
     title = "Update"
@@ -512,11 +551,19 @@ def self_update_status():
         status = "running"
         progress = 85
         title = "Restarting service"
-    if "installed openwrt custom local builder" in lower or (latest and current and latest == current):
+    if unit_status.get("ActiveState") in ["activating", "active"] or unit_status.get("SubState") in ["running", "start"]:
+        status = "running"
+        progress = max(progress, 25)
+        title = "Updater service is running"
+    if "finished openwrt-builder self-update" in lower or "installed openwrt custom local builder" in lower or (latest and current and latest == current):
         status = "success"
         progress = 100
         title = "Application updated"
-    if " error:" in lower or "failed" in lower:
+    if unit_status.get("Result") and unit_status.get("Result") not in ["", "success"]:
+        status = "failed"
+        progress = 100
+        title = "Update failed"
+    if " error:" in lower or "failed openwrt-builder self-update" in lower:
         status = "failed"
         progress = 100
         title = "Update failed"
@@ -530,6 +577,8 @@ def self_update_status():
         "latest_commit": latest,
         "current_short": current[:7] if current else "",
         "latest_short": latest[:7] if latest else "",
+        "unit": unit_name,
+        "unit_status": unit_status,
     }
     for line in reversed(text.splitlines()):
         if line.strip():
