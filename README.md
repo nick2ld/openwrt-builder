@@ -1,8 +1,8 @@
 # OpenWrt Custom Local Builder
 
-OpenWrt Custom Local Builder is a local web application for a Proxmox LXC/VM. It watches the OpenWrt 25.x release branch, downloads the correct ImageBuilder for your selected routers, waits for required external APK packages to appear, builds custom sysupgrade images, keeps the latest firmware files available over HTTP, and can be used as a local sysupgrade server.
+OpenWrt Custom Local Builder is a local web application for a Linux host: a Proxmox LXC container, a Proxmox VM, or a regular Linux virtual machine running on your computer. It watches the OpenWrt 25.x release branch, downloads the correct ImageBuilder for your selected routers, waits for required external APK packages to appear, builds custom sysupgrade images, keeps the latest firmware files available over HTTP, and can be used as a local sysupgrade server.
 
-OpenWrt Custom Local Builder - локальное веб-приложение для LXC/VM в Proxmox. Оно следит за релизами OpenWrt 25.x, скачивает нужный ImageBuilder под выбранные роутеры, ждет появления внешних APK, собирает кастомные sysupgrade-прошивки, хранит последние готовые файлы и раздает их по HTTP для обновления роутеров.
+OpenWrt Custom Local Builder - локальное веб-приложение для Linux-хоста: LXC-контейнера Proxmox, виртуальной машины Proxmox или обычной Linux-виртуалки на компьютере. Оно следит за релизами OpenWrt 25.x, скачивает нужный ImageBuilder под выбранные роутеры, ждет появления внешних APK, собирает кастомные sysupgrade-прошивки, хранит последние готовые файлы и раздает их по HTTP для обновления роутеров.
 
 ![OpenWrt Custom Local Builder web interface](assets/screenshot.png)
 
@@ -38,13 +38,13 @@ OpenWrt Custom Local Builder - локальное веб-приложение д
 
 ### Требования
 
-Рекомендуемый контейнер: Debian 12/13 или Ubuntu 24.04, 2-4 vCPU, 4+ ГБ RAM, 20+ ГБ диска. Для нескольких target/subtarget лучше 40+ ГБ.
+Рекомендуемая система: Debian 12/13 или Ubuntu 24.04 в LXC, VM или обычной локальной Linux-виртуалке, 2-4 vCPU, 4+ ГБ RAM, 20+ ГБ диска. Для нескольких target/subtarget лучше 40+ ГБ.
 
-Контейнеру нужен доступ в интернет и в локальную сеть роутеров. Privileged LXC не обязателен, но ImageBuilder должен запускать `make`, `tar`, `zstd` и писать в `/var/lib/openwrt-builder`.
+Хосту нужен доступ в интернет и в локальную сеть роутеров. Нужен `systemd`, потому что установщик создает сервис `openwrt-builder`. Privileged LXC не обязателен, но ImageBuilder должен запускать `make`, `tar`, `zstd` и писать в `/var/lib/openwrt-builder`.
 
 ### Установка и обновление
 
-В LXC выполните:
+В Linux-хосте выполните:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo bash
@@ -266,13 +266,13 @@ find /var/lib/openwrt-builder/firmware -type f
 
 ### Requirements
 
-Recommended container: Debian 12/13 or Ubuntu 24.04, 2-4 vCPU, 4+ GB RAM, 20+ GB disk. Use 40+ GB if you build several target/subtarget combinations.
+Recommended system: Debian 12/13 or Ubuntu 24.04 in an LXC container, a VM, or a regular local Linux virtual machine, 2-4 vCPU, 4+ GB RAM, 20+ GB disk. Use 40+ GB if you build several target/subtarget combinations.
 
-The container needs internet access and access to your router LAN. A privileged LXC is not required, but ImageBuilder must be able to run `make`, `tar`, `zstd`, and write to `/var/lib/openwrt-builder`.
+The host needs internet access and access to your router LAN. It must use `systemd`, because the installer creates the `openwrt-builder` service. A privileged LXC is not required, but ImageBuilder must be able to run `make`, `tar`, `zstd`, and write to `/var/lib/openwrt-builder`.
 
 ### Install and update
 
-Run in the LXC:
+Run on the Linux host:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nick2ld/openwrt-builder/main/install.sh | sudo bash
