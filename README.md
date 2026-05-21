@@ -4,7 +4,32 @@ OpenWrt Custom Local Builder is a local web application for a Proxmox LXC/VM. It
 
 OpenWrt Custom Local Builder - локальное веб-приложение для LXC/VM в Proxmox. Оно следит за релизами OpenWrt 25.x, скачивает нужный ImageBuilder под выбранные роутеры, ждет появления внешних APK, собирает кастомные sysupgrade-прошивки, хранит последние готовые файлы и раздает их по HTTP для обновления роутеров.
 
-[Русский](#русский) | [English](#english)
+![OpenWrt Custom Local Builder web interface](assets/screenshot.png)
+
+## Оглавление / Table of Contents
+
+- [Русский](#русский)
+- [Что делает приложение](#что-делает-приложение)
+- [Требования](#требования)
+- [Установка и обновление](#установка-и-обновление)
+- [Язык интерфейса](#язык-интерфейса)
+- [Как добавить роутер](#как-добавить-роутер)
+- [Внешние APK / репозитории](#внешние-apk--репозитории)
+- [Сборка](#сборка)
+- [Address of the sysupgrade server](#address-of-the-sysupgrade-server)
+- [Обновление с роутера вручную](#обновление-с-роутера-вручную)
+- [Полезные команды](#полезные-команды)
+- [English](#english)
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Install and update](#install-and-update)
+- [UI language](#ui-language)
+- [Add a router](#add-a-router)
+- [External APK / repositories](#external-apk--repositories)
+- [Build](#build)
+- [Address of the sysupgrade server](#address-of-the-sysupgrade-server-1)
+- [Manual router upgrade](#manual-router-upgrade)
+- [Useful commands](#useful-commands)
 
 ## Русский
 
