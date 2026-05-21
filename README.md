@@ -58,28 +58,11 @@ http://IP_КОНТЕЙНЕРА:8088
 
 Кнопка обновления в веб-интерфейсе использует root-helper через `sudo` и `systemd-run`. Unit устанавливается с `NoNewPrivileges=false`, иначе LXC/Debian может блокировать `sudo`.
 
-### Версии и релизы
-
-Проект использует semver-нумерацию в файле `VERSION`, например `0.2.0`.
-
-Для каждого публичного релиза создается git tag вида `v0.2.0`. GitHub Actions автоматически публикует GitHub Release, берет описание из `CHANGELOG.md` и прикладывает zip-архив:
-
-```text
-openwrt-custom-local-builder-0.2.0.zip
-```
-
-Веб-интерфейс проверяет актуальную версию по GitHub Releases. Commit SHA остается технической информацией для отладки, но не является номером версии приложения.
-
-Обычная разработка идет в `main`. Релиз создается так:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
 ### Язык интерфейса
 
-В шапке есть переключатель `RU / EN`. Выбранный язык сохраняется в `localStorage` браузера, поэтому у разных пользователей может быть разный язык.
+В основных настройках есть выбор языка интерфейса. Выбранный язык сохраняется в `localStorage` браузера, поэтому у разных пользователей может быть разный язык.
+
+Языки лежат отдельными файлами в `locales/*.json`. Название языка берется из поля `languageName`, поэтому пользовательский языковой файл автоматически появится в списке.
 
 Файлы локализации лежат отдельно от скрипта:
 
@@ -290,28 +273,11 @@ http://CONTAINER_IP:8088
 
 The web UI update button uses a root helper via `sudo` and `systemd-run`. The service unit is installed with `NoNewPrivileges=false`; otherwise some LXC/Debian setups block `sudo`.
 
-### Versions and releases
-
-The project uses semantic versions in the `VERSION` file, for example `0.2.0`.
-
-Each public release is a git tag like `v0.2.0`. GitHub Actions creates a GitHub Release automatically, uses `CHANGELOG.md` as release notes, and uploads a zip archive:
-
-```text
-openwrt-custom-local-builder-0.2.0.zip
-```
-
-The web UI checks the latest version through GitHub Releases. Commit SHA remains technical debug information and is not the application version.
-
-Development happens on `main`. To publish a release:
-
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
-
 ### UI language
 
-The header has an `RU / EN` selector. The selected language is saved in browser `localStorage`, so different users can use different languages.
+The main settings include the interface language selector. The selected language is saved in browser `localStorage`, so different users can use different languages.
+
+Locale files are stored separately in `locales/*.json`. The language label is read from `languageName`, so a custom locale file appears in the selector automatically.
 
 Locale files are separate from the Python script:
 
