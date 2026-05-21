@@ -6,9 +6,12 @@ OpenWrt Custom Local Builder - локальное веб-приложение д
 
 ![OpenWrt Custom Local Builder web interface](assets/screenshot.png)
 
-## Оглавление / Table of Contents
+[Русский](#русский) | [English](#english)
 
-- [Русский](#русский)
+## Русский
+
+### Оглавление
+
 - [Что делает приложение](#что-делает-приложение)
 - [Требования](#требования)
 - [Установка и обновление](#установка-и-обновление)
@@ -19,19 +22,6 @@ OpenWrt Custom Local Builder - локальное веб-приложение д
 - [Address of the sysupgrade server](#address-of-the-sysupgrade-server)
 - [Обновление с роутера вручную](#обновление-с-роутера-вручную)
 - [Полезные команды](#полезные-команды)
-- [English](#english)
-- [What it does](#what-it-does)
-- [Requirements](#requirements)
-- [Install and update](#install-and-update)
-- [UI language](#ui-language)
-- [Add a router](#add-a-router)
-- [External APK / repositories](#external-apk--repositories)
-- [Build](#build)
-- [Address of the sysupgrade server](#address-of-the-sysupgrade-server-1)
-- [Manual router upgrade](#manual-router-upgrade)
-- [Useful commands](#useful-commands)
-
-## Русский
 
 ### Что делает приложение
 
@@ -247,6 +237,19 @@ find /var/lib/openwrt-builder/firmware -type f
 ```
 
 ## English
+
+### Table of Contents
+
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Install and update](#install-and-update)
+- [UI language](#ui-language)
+- [Add a router](#add-a-router)
+- [External APK / repositories](#external-apk--repositories)
+- [Build](#build)
+- [Address of the sysupgrade server](#address-of-the-sysupgrade-server-1)
+- [Manual router upgrade](#manual-router-upgrade)
+- [Useful commands](#useful-commands)
 
 ### What it does
 
