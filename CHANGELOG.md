@@ -2,6 +2,12 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.8] - 2026-05-21
+
+### Fixed
+- Active build jobs are now tied to live in-memory workers, so stale `downloading`/`queued` rows left by older versions are marked failed automatically.
+- Manual build workers are registered explicitly to avoid stale jobs blocking new builds after restarts or old race failures.
+
 ## [0.2.7] - 2026-05-21
 
 ### Fixed

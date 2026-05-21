@@ -40,6 +40,7 @@ IMAGEBUILDER_LOCKS = {}
 IMAGEBUILDER_LOCKS_LOCK = threading.Lock()
 ACTIVE_JOBS = {}
 ACTIVE_JOBS_LOCK = threading.Lock()
+ACTIVE_THREAD_JOBS = set()
 CANCELLED_JOBS = set()
 
 
@@ -172,6 +173,7 @@ def read_tail(path, max_bytes=12000):
 
 
 def enriched_state():
+    mark_stale_active_jobs()
     st = state()
     cfg = config()
     jobs = []
@@ -1324,8 +1326,21 @@ def find_job(job_id):
     return next((j for j in state().get("jobs", []) if j.get("id") == job_id), None)
 
 
+def active_statuses():
+    return {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+
+
+def job_has_live_worker(job_id):
+    with ACTIVE_JOBS_LOCK:
+        if job_id in ACTIVE_THREAD_JOBS:
+            return True
+        proc = ACTIVE_JOBS.get(job_id)
+    return bool(proc and proc.poll() is None)
+
+
 def active_job_for_router(router_name):
-    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+    mark_stale_active_jobs()
+    active = active_statuses()
     return next(
         (
             j for j in state().get("jobs", [])
@@ -1336,7 +1351,7 @@ def active_job_for_router(router_name):
 
 
 def clear_stale_active_jobs(router_name, keep_job_id=None):
-    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+    active = active_statuses()
 
     def mutate(st):
         jobs = []
@@ -1352,16 +1367,18 @@ def clear_stale_active_jobs(router_name, keep_job_id=None):
 
 
 def mark_stale_active_jobs():
-    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+    active = active_statuses()
 
     def mutate(st):
         for job in st.get("jobs", []):
             if job.get("status") not in active:
                 continue
+            if job_has_live_worker(job.get("id")):
+                continue
             job["status"] = "failed"
             job["progress"] = 100
-            job["error"] = "Stale active job after service restart"
-            job["last_line"] = "Stale active job after service restart"
+            job["error"] = "Stale active job without a live build worker"
+            job["last_line"] = "Stale active job without a live build worker"
             job["updated_at"] = utc_now()
     update_state(mutate)
 
@@ -1432,8 +1449,18 @@ def unregister_process(job_id):
         ACTIVE_JOBS.pop(job_id, None)
 
 
+def register_worker(job_id):
+    with ACTIVE_JOBS_LOCK:
+        ACTIVE_THREAD_JOBS.add(job_id)
+
+
+def unregister_worker(job_id):
+    with ACTIVE_JOBS_LOCK:
+        ACTIVE_THREAD_JOBS.discard(job_id)
+
+
 def active_jobs_for_router(router_name):
-    active = {"queued", "running", "downloading", "checking", "building", "publishing", "waiting_apks"}
+    active = active_statuses()
     return [
         j for j in state().get("jobs", [])
         if j.get("router") == router_name and j.get("status") in active
@@ -1501,6 +1528,7 @@ def enqueue_manual_build(router_name=None, force=True, job_id_override=None, que
 
 
 def manual_build_worker(job_id, log_path, router_name, force):
+    register_worker(job_id)
     try:
         if is_job_cancelled(job_id):
             record_job(job_id, router_name or "all", "pending", "cancelled", log_path, {"error": "Cancelled by user"})
@@ -1519,6 +1547,7 @@ def manual_build_worker(job_id, log_path, router_name, force):
         record_job(job_id, router_name or "all", "pending", status, log_path, {"error": str(exc)})
     finally:
         unregister_process(job_id)
+        unregister_worker(job_id)
 
 
 def waiting_job_for_missing_apks(release, router, report):
@@ -1698,6 +1727,7 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
         job_id = job_id_override or f"{int(time.time())}-{sanitize_job_part(name)}"
         log_path = log_path_override or LOG_DIR / f"{job_id}.log"
         build_key = build_input_key(cfg, router)
+        register_worker(job_id)
 
         def log(msg):
             line = f"[{utc_now()}] {msg}\n"
@@ -1832,6 +1862,8 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
                 extra["error_type"] = "image_too_big"
             set_job("failed", extra)
             prune_jobs_state()
+        finally:
+            unregister_worker(job_id)
 
 
 def check_and_build(force=False, router_name=None):
