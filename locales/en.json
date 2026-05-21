@@ -1,4 +1,6 @@
 {
+  "languageName": "English",
+  "language": "Interface language",
   "home": "Home",
   "subtitle": "Local OpenWrt 25.x custom firmware builder",
   "buildAllAvailable": "Build all available firmware",

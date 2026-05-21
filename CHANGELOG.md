@@ -2,6 +2,13 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.11] - 2026-05-21
+
+### Changed
+- Moved interface language selection into Main settings.
+- Language names are now shown as full names and loaded from locale files.
+- Custom `locales/*.json` files are discovered automatically through `/api/locales`.
+
 ## [0.2.10] - 2026-05-21
 
 ### Changed

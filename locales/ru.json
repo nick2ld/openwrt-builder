@@ -1,4 +1,6 @@
 {
+  "languageName": "Русский",
+  "language": "Язык интерфейса",
   "home": "На главную",
   "subtitle": "Локальная сборка прошивок для OpenWrt 25.x",
   "buildAllAvailable": "Собрать все доступные прошивки",

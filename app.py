@@ -83,6 +83,26 @@ def read_json(path, default):
         return default
 
 
+def available_locales():
+    items = []
+    if not LOCALE_DIR.exists():
+        return [{"code": "ru", "name": "Русский"}, {"code": "en", "name": "English"}]
+    for path in sorted(LOCALE_DIR.glob("*.json")):
+        code = path.stem
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        name = str(data.get("languageName") or code).strip() or code
+        items.append({"code": code, "name": name})
+    codes = {item["code"] for item in items}
+    if "ru" not in codes:
+        items.insert(0, {"code": "ru", "name": "Русский"})
+    if "en" not in codes:
+        items.append({"code": "en", "name": "English"})
+    return items
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -2358,10 +2378,6 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     <div class="row">
       <span id="latest" class="pill"><span class="status-dot"></span>...</span>
-      <select id="languageSelect" onchange="setLanguage(this.value)" style="width:auto; min-width:82px">
-        <option value="ru">RU</option>
-        <option value="en">EN</option>
-      </select>
       <button onclick="buildAllAvailable()" data-i18n="buildAllAvailable">Собрать все доступные прошивки</button>
     </div>
   </div>
@@ -2380,6 +2396,7 @@ INDEX_HTML = r"""<!doctype html>
       <label><span data-i18n="releaseBranch">Ветка релизов</span> <input id="release_branch_prefix" placeholder="25." oninput="scheduleSave()"></label>
       <label><span data-i18n="checkEveryMinutes">Проверять каждые, минут</span> <input id="check_interval_minutes" type="number" min="5" oninput="scheduleSave()"></label>
       <label><span data-i18n="allowUntrusted">Разрешить untrusted APK</span> <select id="allow_untrusted_apk" onchange="scheduleSave()"><option value="true" data-i18n="yes">Да</option><option value="false" data-i18n="no">Нет</option></select></label>
+      <label><span data-i18n="language">Язык интерфейса</span> <select id="languageSelect" onchange="setLanguage(this.value)"><option value="ru">Русский</option><option value="en">English</option></select></label>
     </div>
   </section>
   <section>
@@ -2554,6 +2571,7 @@ let jobCache = [];
 let routerStatusCache = {};
 let messages = {};
 let currentLang = localStorage.getItem('owb_language') || ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
+let localeOptions = [{code:'ru', name:'Русский'}, {code:'en', name:'English'}];
 let logAutoScroll = true;
 let updatePollTimer = null;
 let asuRequestCache = [];
@@ -2566,6 +2584,7 @@ function t(key, params = {}) {
 
 async function loadLocale(lang) {
   currentLang = lang;
+  renderLanguageOptions();
   languageSelect.value = lang;
   localStorage.setItem('owb_language', lang);
   document.documentElement.lang = lang;
@@ -2584,6 +2603,23 @@ async function loadLocale(lang) {
 
 function setLanguage(lang) {
   loadLocale(lang);
+}
+
+async function loadLocales() {
+  try {
+    const data = await api('/api/locales');
+    localeOptions = data.locales || localeOptions;
+  } catch (e) {
+    localeOptions = localeOptions;
+  }
+  if (!localeOptions.some(item => item.code === currentLang)) currentLang = localeOptions[0]?.code || 'en';
+  renderLanguageOptions();
+}
+
+function renderLanguageOptions() {
+  if (!window.languageSelect) return;
+  languageSelect.innerHTML = localeOptions.map(item => `<option value="${esc(item.code)}">${esc(item.name || item.code)}</option>`).join('');
+  languageSelect.value = currentLang;
 }
 
 function applyI18n() {
@@ -3265,7 +3301,7 @@ async function load() {
   if (!dirty) bindConfig();
   loadAsuRequests();
 }
-loadLocale(currentLang).then(() => {
+loadLocales().then(() => loadLocale(currentLang)).then(() => {
   load();
   checkVersion();
 });
@@ -3334,6 +3370,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, config())
         elif path == "/api/status":
             self.send(200, enriched_state())
+        elif path == "/api/locales":
+            self.send(200, {"locales": available_locales()})
         elif path.startswith("/api/router-firmware/"):
             router = urllib.parse.unquote(path[len("/api/router-firmware/"):])
             self.send(200, firmware_history_response(router))
