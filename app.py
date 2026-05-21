@@ -2257,6 +2257,7 @@ INDEX_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenWrt Custom Local Builder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231a73e8'/%3E%3Cpath d='M18 38V26h5v12h-5Zm8 0 4-12h4l4 12h-5l-1-4h-3l-1 4h-2Zm4-8h2l-1-4-1 4Zm12 8V26h5v7l4-7h5l-5 8 6 4h-6l-4-3v3h-5Z' fill='white'/%3E%3C/svg%3E">
   <style>
     :root {
       --bg: #f8fafd;
@@ -2337,6 +2338,9 @@ INDEX_HTML = r"""<!doctype html>
     footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 28px; color: var(--muted); }
     .footer-bar { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; box-shadow: 0 1px 2px rgba(60,64,67,.06); }
     .footer-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .icon-link { width: 36px; height: 36px; border-radius: 8px; display: inline-grid; place-items: center; color: #202124; background: var(--surface-2); border: 1px solid var(--border); }
+    .icon-link:hover { background: #e8f0fe; color: var(--primary); text-decoration: none; }
+    .icon-link svg { width: 20px; height: 20px; display: block; fill: currentColor; }
     a { color: var(--primary); text-decoration: none; font-weight: 700; }
     a:hover { text-decoration: underline; }
     @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .firmware-item { grid-template-columns: 1fr; } .firmware-actions { justify-content: flex-start; } .topbar, main { padding-left: 16px; padding-right: 16px; } .topbar { display: grid; height: auto; padding-top: 14px; padding-bottom: 14px; } .toolbar, .section-head { align-items: stretch; } }
@@ -2424,7 +2428,9 @@ INDEX_HTML = r"""<!doctype html>
 <footer>
   <div class="footer-bar">
     <div class="footer-meta">
-      <a id="repoLink" href="https://github.com/nick2ld/openwrt-builder" target="_blank" rel="noreferrer">GitHub</a>
+      <a id="repoLink" class="icon-link" href="https://github.com/nick2ld/openwrt-builder" target="_blank" rel="noreferrer" aria-label="GitHub" title="GitHub">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.72.08-.72 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.48.99.11-.78.42-1.3.76-1.6-2.67-.31-5.47-1.34-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.53.12-3.18 0 0 1.01-.32 3.3 1.23a11.43 11.43 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.6-2.8 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.69.83.57A12 12 0 0 0 12 .5Z"/></svg>
+      </a>
       <span id="versionStatus" data-i18n="checkingVersion">Проверка версии...</span>
     </div>
     <div class="row">

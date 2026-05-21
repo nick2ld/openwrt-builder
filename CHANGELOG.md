@@ -2,6 +2,12 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.10] - 2026-05-21
+
+### Changed
+- Replaced the footer GitHub text link with an icon button.
+- Added an inline SVG favicon for the web UI.
+
 ## [0.2.9] - 2026-05-21
 
 ### Fixed
