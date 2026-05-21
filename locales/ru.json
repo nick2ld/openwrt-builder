@@ -124,5 +124,6 @@
   "routerStatusFailed": "Ошибка сборки",
   "routerStatusQueued": "В очереди",
   "routerStatusIdle": "Не собиралось",
-  "routerStatusUnknown": "Неизвестно"
+  "routerStatusUnknown": "Неизвестно",
+  "routerRequiredFields": "У роутера должны быть заполнены Target, Subtarget, Profile и Arch. Выберите модель из поиска или заполните поля вручную."
 }

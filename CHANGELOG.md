@@ -2,6 +2,12 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.6] - 2026-05-21
+
+### Fixed
+- Router search now normalizes target/subtarget values and reads architecture from both target and profile metadata.
+- Router saving now blocks incomplete entries without Target, Subtarget, Profile, or Arch.
+
 ## [0.2.5] - 2026-05-21
 
 ### Fixed

@@ -307,10 +307,34 @@ def merge_packages(*groups):
 
 
 def split_target_path(target_path):
+    if isinstance(target_path, dict):
+        target_path = target_path.get("id") or target_path.get("target") or target_path.get("name") or ""
+    if isinstance(target_path, list):
+        target_path = next((item for item in target_path if item), "")
     parts = str(target_path or "").strip("/").split("/")
     if len(parts) >= 2:
         return parts[0], parts[1]
     return str(target_path or ""), ""
+
+
+def join_target_path(target, subtarget):
+    target = str(target or "").strip("/")
+    subtarget = str(subtarget or "").strip("/")
+    return f"{target}/{subtarget}" if target and subtarget else target
+
+
+def profile_map(profiles):
+    if isinstance(profiles, dict):
+        return profiles
+    if isinstance(profiles, list):
+        result = {}
+        for item in profiles:
+            if isinstance(item, dict):
+                profile_id = item.get("id") or item.get("profile") or item.get("name")
+                if profile_id:
+                    result[profile_id] = item
+        return result
+    return {}
 
 
 def load_release_overview(release):
@@ -353,8 +377,9 @@ def search_devices(query, limit=20):
     matches = []
     for item in overview.get("profiles", []):
         profile_id = item.get("id") or item.get("profile") or ""
-        target_path = item.get("target") or ""
+        target_path = item.get("target") or item.get("target_path") or item.get("target_id") or ""
         target, subtarget = split_target_path(target_path)
+        target_path = join_target_path(target, subtarget)
         titles = item.get("titles") or []
         if isinstance(titles, dict):
             titles = [titles]
@@ -375,7 +400,8 @@ def search_devices(query, limit=20):
     for match in matches:
         try:
             profiles_json = load_profiles_json(release, match["target_path"])
-            profile = profiles_json.get("profiles", {}).get(match["profile"], {})
+            profiles = profile_map(profiles_json.get("profiles", {}))
+            profile = profiles.get(match["profile"], {})
             packages = merge_packages(
                 profiles_json.get("default_packages", []),
                 profiles_json.get("target_packages", []),
@@ -383,9 +409,23 @@ def search_devices(query, limit=20):
                 profile.get("packages", []),
                 ["luci", "luci-app-attendedsysupgrade"],
             )
-            match["arch"] = profiles_json.get("arch_packages", "")
-            match["packages"] = " ".join(packages)
-            match["name"] = profile_display_name(match["profile"], profile)
+            target, subtarget = split_target_path(profile.get("target") or profile.get("target_path") or match["target_path"])
+            if target and subtarget:
+                match["target"] = target
+                match["subtarget"] = subtarget
+                match["target_path"] = join_target_path(target, subtarget)
+            match["arch"] = (
+                profile.get("arch_packages")
+                or profile.get("arch")
+                or profiles_json.get("arch_packages")
+                or profiles_json.get("architecture")
+                or match.get("arch", "")
+            )
+            if packages:
+                match["packages"] = " ".join(packages)
+            display_name = profile_display_name(match["profile"], profile) if profile else ""
+            if display_name:
+                match["name"] = display_name
         except Exception:
             pass
     return {"release": release, "devices": matches}
@@ -2641,6 +2681,10 @@ function routerFromModal() {
 async function saveRouterModal() {
   cfg.routers = cfg.routers || [];
   const router = routerFromModal();
+  if (!router.target || !router.subtarget || !router.profile || !router.arch) {
+    alert(t('routerRequiredFields'));
+    return;
+  }
   if (editingRouterIndex === null) {
     router.name = uniqueRouterName(router.name);
     cfg.routers.push(router);

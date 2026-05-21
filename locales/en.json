@@ -124,5 +124,6 @@
   "routerStatusFailed": "Build failed",
   "routerStatusQueued": "Queued",
   "routerStatusIdle": "Not built yet",
-  "routerStatusUnknown": "Unknown"
+  "routerStatusUnknown": "Unknown",
+  "routerRequiredFields": "Target, Subtarget, Profile, and Arch must be filled for the router. Select a model from search or fill the fields manually."
 }
