@@ -2,6 +2,12 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.9] - 2026-05-21
+
+### Fixed
+- Manual builds register their worker before the queued job is saved, preventing a second click from creating a duplicate job.
+- Removed the host `OPENSSL_CONF` override because it can break ImageBuilder's bundled OpenSSL on some releases.
+
 ## [0.2.8] - 2026-05-21
 
 ### Fixed

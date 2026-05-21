@@ -1518,6 +1518,7 @@ def enqueue_manual_build(router_name=None, force=True, job_id_override=None, que
         job_id = job_id_override or f"{int(time.time())}-manual-{sanitize_job_part(name)}"
         log_path = LOG_DIR / f"{sanitize_job_part(job_id)}.log"
         append_job_log(log_path, queued_message)
+        register_worker(job_id)
         record_job(job_id, name, "pending", "queued", log_path)
         thread = threading.Thread(
             target=lambda: manual_build_worker(job_id, log_path, router_name, force),
@@ -1528,7 +1529,6 @@ def enqueue_manual_build(router_name=None, force=True, job_id_override=None, que
 
 
 def manual_build_worker(job_id, log_path, router_name, force):
-    register_worker(job_id)
     try:
         if is_job_cancelled(job_id):
             record_job(job_id, router_name or "all", "pending", "cancelled", log_path, {"error": "Cancelled by user"})
@@ -1586,10 +1586,6 @@ def prepare_imagebuilder_environment(builder_dir, log):
     tmp_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["TMPDIR"] = str(tmp_dir)
-    for openssl_conf in [Path("/etc/ssl/openssl.cnf"), Path("/usr/lib/ssl/openssl.cnf")]:
-        if openssl_conf.exists():
-            env["OPENSSL_CONF"] = str(openssl_conf)
-            break
     return env
 
 
