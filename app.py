@@ -1552,6 +1552,40 @@ def copy_apks_to_builder(builder_dir, apks):
     return copied
 
 
+def prepare_imagebuilder_environment(builder_dir, log):
+    tmp_dir = builder_dir / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["TMPDIR"] = str(tmp_dir)
+    for openssl_conf in [Path("/etc/ssl/openssl.cnf"), Path("/usr/lib/ssl/openssl.cnf")]:
+        if openssl_conf.exists():
+            env["OPENSSL_CONF"] = str(openssl_conf)
+            break
+    return env
+
+
+def refresh_local_package_index(builder_dir, env, log):
+    packages_dir = builder_dir / "packages"
+    local_apks_dir = builder_dir / "local-apks"
+    if not local_apks_dir.exists() or not any(local_apks_dir.glob("*.apk")):
+        return
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["make", "package_index"],
+        cwd=builder_dir,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if result.stdout:
+        for line in result.stdout.splitlines():
+            if line.strip():
+                log(line)
+    if result.returncode != 0:
+        log(f"Local package index refresh failed with exit code {result.returncode}; continuing with make image")
+
+
 def patch_imagebuilder_for_untrusted_apk(builder_dir, log):
     patched = []
     candidates = [builder_dir / "Makefile"]
@@ -1715,11 +1749,18 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
             if stop_if_cancelled("after APK check"):
                 continue
             local_apks = copy_apks_to_builder(builder, apks)
+            env = prepare_imagebuilder_environment(builder, log)
+            if cfg.get("allow_untrusted_apk", True):
+                env["APK_FLAGS"] = "--allow-untrusted"
+                env["APK_ADD_FLAGS"] = "--allow-untrusted"
+                env["APK_OPTS"] = "--allow-untrusted"
+                env["OPENWRT_BUILDER_ALLOW_UNTRUSTED_APK"] = "1"
             if cfg.get("allow_untrusted_apk", True) and local_apks:
                 patch_imagebuilder_for_untrusted_apk(builder, log)
             files_dir = builder / "files"
             if cfg.get("allow_untrusted_apk", True):
                 extract_apk_overlay(local_apks, files_dir, log)
+            refresh_local_package_index(builder, env, log)
             if stop_if_cancelled("before ImageBuilder run"):
                 continue
 
@@ -1728,18 +1769,12 @@ def run_build(release, router_name=None, force=False, job_id_override=None, log_
             cmd = ["make", "image", f"PROFILE={profile}", f"PACKAGES={' '.join(package_args)}"]
             if files_dir.exists():
                 cmd.append(f"FILES={files_dir}")
-            env = os.environ.copy()
-            if cfg.get("allow_untrusted_apk", True):
-                env["APK_FLAGS"] = "--allow-untrusted"
-                env["APK_ADD_FLAGS"] = "--allow-untrusted"
-                env["APK_OPTS"] = "--allow-untrusted"
-                env["OPENWRT_BUILDER_ALLOW_UNTRUSTED_APK"] = "1"
-                if local_apks:
-                    cmd.extend([
-                        "APK_FLAGS=--allow-untrusted",
-                        "APK_ADD_FLAGS=--allow-untrusted",
-                        "APK_OPTS=--allow-untrusted",
-                    ])
+            if cfg.get("allow_untrusted_apk", True) and local_apks:
+                cmd.extend([
+                    "APK_FLAGS=--allow-untrusted",
+                    "APK_ADD_FLAGS=--allow-untrusted",
+                    "APK_OPTS=--allow-untrusted",
+                ])
             set_job("building")
             log("Running: " + " ".join(cmd))
             with log_path.open("a", encoding="utf-8") as logfh:

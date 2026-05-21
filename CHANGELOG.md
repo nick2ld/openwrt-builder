@@ -2,6 +2,13 @@
 
 All notable changes to OpenWrt Custom Local Builder are tracked here.
 
+## [0.2.7] - 2026-05-21
+
+### Fixed
+- ImageBuilder now gets a real `tmp` directory through `TMPDIR`, avoiding temporary-directory warnings.
+- ImageBuilder now uses the system OpenSSL config when available, reducing `openssl.cnf` warnings.
+- Local APK package indexes are refreshed before image builds when external APKs are present.
+
 ## [0.2.6] - 2026-05-21
 
 ### Fixed
